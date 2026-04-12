@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <!--
-  MLBB Matchmaking — admin.html  (v3)
+  MLBB Matchmaking — admin.html  (v5)
   ─────────────────────────────────────
-  Access: Opened via /admin bot command → secure token link
+  Access: Opened via /admin bot command → web_app button → Telegram ID verify
   Features:
-    • Token auth guard on load
+    • Telegram ID auth (via telegram-web-app.js or manual entry)
     • Tab 1: Deposits   — Confirm / Reject pending deposits
     • Tab 2: Users      — Search, balance adjust, ban/unban
     • Tab 3: Matches    — Resolve verifying matches, view all
@@ -13,6 +13,7 @@
 <html lang="my">
 <head>
   <meta charset="UTF-8"/>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>MLBB Admin Panel</title>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -75,7 +76,7 @@
     #toast.info   {border-color:#3b82f6;color:#60a5fa;}
     /* Auth screen */
     #auth-screen{position:fixed;inset:0;background:#0f172a;z-index:100;
-                 display:flex;align-items:center;justify-content:center;}
+                 display:none;align-items:center;justify-content:center;}
     /* Reject modal */
     #reject-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;
                   display:none;align-items:center;justify-content:center;padding:20px;}
@@ -94,11 +95,20 @@
 </head>
 <body>
 
-<!-- Auth screen (shown while validating token) -->
+<!-- Auth screen -->
 <div id="auth-screen">
-  <div class="text-center">
-    <div class="spinner" style="margin:0 auto 16px;"></div>
-    <p class="text-slate-400 text-sm">Token စစ်ဆေးနေသည်…</p>
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:20px;padding:32px 24px;width:100%;max-width:380px;margin:20px;text-align:center;">
+    <div style="font-size:2.5rem;margin-bottom:8px;">🛡️</div>
+    <div style="font-size:1.3rem;font-weight:900;color:#f59e0b;margin-bottom:6px;font-family:'Rajdhani',sans-serif;">MLBB Admin</div>
+    <div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.6;">Admin ဝင်ရောက်ရန် Telegram Bot မှ /admin ရိုက်ပါ<br>သို့မဟုတ် Telegram ID ဖြင့် ဝင်ရောက်ပါ</div>
+    <input id="authId" type="number" placeholder="Telegram ID ထည့်ပါ"
+      style="background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:10px 14px;width:100%;font-size:14px;outline:none;margin-bottom:10px;font-family:inherit;"/>
+    <button onclick="doAdminVerify()"
+      style="background:#f59e0b;color:#0f172a;border:none;border-radius:8px;padding:11px;width:100%;font-weight:700;font-size:14px;cursor:pointer;font-family:'Rajdhani',sans-serif;">
+      <span id="authTx">🔐 ဝင်ရောက်မည်</span>
+      <div id="authSp" class="spinner" style="display:none;width:18px;height:18px;margin:0 auto;border-width:2px;"></div>
+    </button>
+    <div id="authErr" style="color:#f87171;font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 </div>
 
@@ -262,66 +272,85 @@
 /* ─────────────────────────────────
    CONFIG
    ───────────────────────────────── */
-const BACKEND_URL   = "https://mlbbbackend.onrender.com"; // ← same backend
-const ADMIN_SECRET  = "";  // ← Fill this in OR read from URL param (see initAdmin)
+const BACKEND_URL = "https://mlbbbackend.onrender.com";
 
 /* ─────────────────────────────────
    STATE
    ───────────────────────────────── */
-let adminToken      = "";
-let adminSecret     = "";
+let adminId         = null;
 let pendingRejectId = null;
 let pendingBanId    = null;
 let pendingBalance  = { tid: null, username: null, action: null };
 
 /* ─────────────────────────────────
-   INIT — token validation
+   INIT — Telegram ID verification
    ───────────────────────────────── */
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.expand(); tg.ready(); }
+
 async function initAdmin() {
-  const params  = new URLSearchParams(window.location.search);
-  adminToken    = params.get("token") || "";
-  // Admin secret can also be passed as URL param for convenience
-  // (better: store in sessionStorage after first manual entry)
-  adminSecret   = params.get("secret") || sessionStorage.getItem("admin_secret") || "";
-
-  if (!adminToken) {
-    showAuthError("Token မပါ — /admin command ကို Bot ထဲ ရိုက်ပါ");
+  // Try to restore session
+  const saved = sessionStorage.getItem("adminId");
+  if (saved) {
+    adminId = parseInt(saved);
+    showApp();
     return;
   }
 
-  // If secret not in URL, prompt once
-  if (!adminSecret) {
-    adminSecret = prompt("Admin Secret ထည့်ပါ:") || "";
-    if (!adminSecret) { showAuthError("Admin Secret မပါ"); return; }
-    sessionStorage.setItem("admin_secret", adminSecret);
+  // If opened as Telegram Mini App, auto-fill ID and verify
+  const tgUser = tg?.initDataUnsafe?.user;
+  if (tgUser?.id) {
+    document.getElementById("authId").value = tgUser.id;
+    await doAdminVerify();
+    return;
   }
 
+  // Show auth screen for manual entry
+  document.getElementById("auth-screen").style.display = "flex";
+}
+
+async function doAdminVerify() {
+  const idVal = document.getElementById("authId").value.trim();
+  const tid   = parseInt(idVal);
+  if (!tid || isNaN(tid)) {
+    showAuthErr("Telegram ID မမှန်ကန်ပါ"); return;
+  }
+  document.getElementById("authTx").style.display = "none";
+  document.getElementById("authSp").style.display  = "block";
+  document.getElementById("authErr").style.display = "none";
   try {
-    const res = await fetch(`${BACKEND_URL}/api/admin/validate?token=${adminToken}`);
-    const data = await res.json();
-    if (!data.valid) { showAuthError("Token မမှန်ကန် သို့မဟုတ် သက်တမ်းကုန်သည်"); return; }
+    const r = await fetch(`${BACKEND_URL}/api/admin/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ telegramId: tid })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { showAuthErr(d.error || "Admin မဟုတ်ပါ"); return; }
+    adminId = d.adminId;
+    sessionStorage.setItem("adminId", adminId);
+    showApp();
   } catch {
-    showAuthError("Server ချိတ်ဆက်မှု မအောင်မြင်");
-    return;
+    showAuthErr("Server ချိတ်ဆက်မှု မအောင်မြင်");
+  } finally {
+    document.getElementById("authTx").style.display = "inline";
+    document.getElementById("authSp").style.display  = "none";
   }
+}
 
-  // Auth passed — show app
+function showApp() {
   document.getElementById("auth-screen").style.display = "none";
   document.getElementById("main-app").classList.remove("hidden");
-
-  // Load initial data
   fetchDeposits();
   fetchUsers();
   fetchMatches();
 }
 
-function showAuthError(msg) {
-  document.getElementById("auth-screen").innerHTML = `
-    <div class="text-center px-8">
-      <div class="text-5xl mb-4">🔐</div>
-      <p class="text-rose-400 font-bold text-base mb-2">${msg}</p>
-      <p class="text-slate-500 text-sm">Telegram Bot ထဲ /admin command နှိပ်ပြီး Link ထပ်ရယူပါ</p>
-    </div>`;
+function showAuthErr(msg) {
+  const el = document.getElementById("authErr");
+  el.textContent = msg;
+  el.style.display = "block";
+  document.getElementById("authTx").style.display = "inline";
+  document.getElementById("authSp").style.display  = "none";
 }
 
 /* ─────────────────────────────────
@@ -588,7 +617,7 @@ async function resolveMatch() {
 async function adminFetch(path, method="GET", body=null) {
   const opts = {
     method,
-    headers: { "Content-Type":"application/json", "X-Admin-Secret": adminSecret },
+    headers: { "Content-Type":"application/json", "x-admin-id": String(adminId) },
   };
   if (body) opts.body = JSON.stringify(body);
   const res  = await fetch(BACKEND_URL + path, opts);
@@ -616,6 +645,7 @@ function fmtDate(s){
 
 /* Boot */
 document.addEventListener("DOMContentLoaded", initAdmin);
+initAdmin();
 </script>
 </body>
 </html>
