@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<!--
+  ╔══════════════════════════════════════════════════════════════╗
+  ║   MLBB Matchmaking & Betting — Telegram Mini App            ║
+  ║   Frontend  : Vanilla HTML + Tailwind CSS CDN + Vanilla JS  ║
+  ║   Deploy    : Vercel (static)                               ║
+  ║   Backend   : Render (Node/Express — server.js)             ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  FILE STRUCTURE
+  ─────────────
+  1.  <head>          — Meta tags, CDN imports (Tailwind, Telegram WebApp)
+  2.  <body>          — Full HTML layout
+      ├─ #app         — Root container
+      ├─ #header      — Avatar + Username (left) | OMMK/AddFunds/Withdrawal (right)
+      ├─ #tab-home    — Lobby: active match cards
+      ├─ #tab-match   — Create match form
+      ├─ #tab-history — User match history
+      ├─ #tab-upload  — Upload / proof screen (placeholder)
+      └─ #bottom-nav  — 4-tab navigation bar
+  3.  <script>        — All JavaScript logic
+      ├─ CONFIG       — Backend URL constant
+      ├─ STATE        — Single source-of-truth app state object
+      ├─ INIT         — Telegram WebApp init + user registration
+      ├─ NAVIGATION   — Tab switching helpers
+      ├─ HOME TAB     — fetchMatches(), renderMatches(), playMatch(), hideMatch()
+      ├─ MATCH TAB    — generateSerial(), validateBet(), createMatch()
+      ├─ HISTORY TAB  — fetchHistory(), renderHistory()
+      └─ UTILS        — showToast(), formatAmount(), etc.
+-->
+<html lang="my">
+<head>
+  <!-- ═══════════════════════════════════════════════
+       SECTION 1 · HEAD — Meta + CDN Imports
+       ═══════════════════════════════════════════════ -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>MLBB Matchmaking</title>
+
+  <!-- Telegram Mini App SDK (must load before our script) -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Font: Noto Sans Myanmar (Burmese support) + Rajdhani (game feel) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- ═══════════════════════════════════════════════
+       SECTION 2 · STYLES — Custom CSS + Tailwind Config
+       ═══════════════════════════════════════════════ -->
+  <script>
+    /* Tailwind theme extension */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand:  { DEFAULT: "#f59e0b", dark: "#d97706", light: "#fcd34d" },
+            surface: { DEFAULT: "#1e293b", card: "#0f172a", border: "#334155" },
+          },
+          fontFamily: {
+            myanmar: ["Noto Sans Myanmar", "sans-serif"],
+            game:    ["Rajdhani", "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ── Base Reset ── */
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: "Noto Sans Myanmar", "Rajdhani", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden; /* prevent body scroll; inner panels scroll */
+    }
+
+    /* ── Root App Shell ── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;       /* dynamic viewport height — Telegram safe */
+      max-width: 480px;
+      margin: 0 auto;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ── Tab Panels ── */
+    .tab-panel {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px 16px 80px; /* bottom pad clears nav bar */
+      -webkit-overflow-scrolling: touch;
+    }
+    .tab-panel.active { display: block; }
+
+    /* ── Bottom Nav ── */
+    #bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 480px;
+      background: #1e293b;
+      border-top: 1px solid #334155;
+      display: flex;
+      z-index: 50;
+    }
+    .nav-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 4px;
+      cursor: pointer;
+      font-size: 10px;
+      color: #64748b;
+      transition: color .2s;
+      border: none;
+      background: transparent;
+      gap: 3px;
+    }
+    .nav-btn.active { color: #f59e0b; }
+    .nav-btn svg    { width: 22px; height: 22px; }
+
+    /* ── Match Cards ── */
+    .match-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      transition: border-color .2s;
+    }
+    .match-card:hover { border-color: #f59e0b55; }
+
+    /* ── Toast Notification ── */
+    #toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-80px);
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 20px;
+      font-size: 13px;
+      z-index: 999;
+      transition: transform .35s cubic-bezier(.34,1.56,.64,1);
+      white-space: nowrap;
+      max-width: 90vw;
+      text-align: center;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.success { border-color: #22c55e; color: #4ade80; }
+    #toast.error   { border-color: #ef4444; color: #f87171; }
+    #toast.info    { border-color: #3b82f6; color: #60a5fa; }
+
+    /* ── Loading Spinner ── */
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid #334155;
+      border-top-color: #f59e0b;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 40px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Form Inputs ── */
+    .field {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      padding: 10px 14px;
+      width: 100%;
+      font-family: inherit;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .field:focus   { border-color: #f59e0b; }
+    .field:disabled { opacity: .5; cursor: not-allowed; }
+    .field[readonly] { opacity: .7; background: #1e293b; }
+
+    /* ── Bet Amount Grid ── */
+    .bet-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .bet-chip {
+      padding: 9px 4px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: "Rajdhani", sans-serif;
+      cursor: pointer;
+      text-align: center;
+      transition: all .15s;
+      user-select: none;
+    }
+    .bet-chip:hover:not(.disabled) { border-color: #f59e0b88; color: #fcd34d; }
+    .bet-chip.selected { border-color: #f59e0b; background: #f59e0b22; color: #f59e0b; }
+    .bet-chip.disabled { opacity: .35; cursor: not-allowed; pointer-events: none; }
+
+    /* ── Pulse animation for serial ID ── */
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+    .fade-in { animation: fadeIn .4s ease forwards; }
+
+    /* ── Scrollbar styling ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+
+<body>
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 3 · HTML LAYOUT
+     ═══════════════════════════════════════════════════════════ -->
+
+<!-- Toast notification (appears at top) -->
+<div id="toast"></div>
+
+<!-- ── Main App Shell ── -->
+<div id="app">
+
+  <!-- ══════════════════════════════════════
+       HEADER — Avatar | Username | Actions
+       ══════════════════════════════════════ -->
+  <header id="header" class="flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-900 shrink-0">
+
+    <!-- Left: Avatar + Username -->
+    <div class="flex items-center gap-3">
+      <!-- Circular avatar placeholder -->
+      <div id="avatar"
+           class="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center text-slate-900 font-bold text-base shrink-0 select-none">
+        ?
+      </div>
+      <!-- Username + Balance -->
+      <div class="flex flex-col leading-tight">
+        <span id="display-username" class="text-sm font-semibold text-slate-100 font-game">@---</span>
+        <span class="text-xs text-slate-400">
+          Balance: <span id="display-balance" class="text-amber-400 font-semibold">0</span> ကျပ်
+        </span>
+      </div>
+    </div>
+
+    <!-- Right: OMMK / AddFunds / Withdrawal stacked -->
+    <div class="flex flex-col items-end gap-0.5 text-right">
+      <span class="text-xs font-bold text-amber-400 font-game tracking-wider">OMMK</span>
+      <button onclick="showComingSoon('AddFunds')"
+              class="text-xs text-emerald-400 hover:text-emerald-300 transition-colors font-semibold cursor-pointer bg-transparent border-none p-0">
+        + AddFunds
+      </button>
+      <button onclick="showComingSoon('Withdrawal')"
+              class="text-xs text-rose-400 hover:text-rose-300 transition-colors font-semibold cursor-pointer bg-transparent border-none p-0">
+        − Withdrawal
+      </button>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════
+       TAB: HOME — Match Lobby
+       ══════════════════════════════════════ -->
+  <div id="tab-home" class="tab-panel active">
+
+    <!-- Section title -->
+    <div class="flex items-center justify-between mb-3 pt-1">
+      <h2 class="text-base font-bold text-slate-100 font-game tracking-wide">🏟 Match Lobby</h2>
+      <button onclick="fetchMatches()"
+              class="text-xs text-amber-400 border border-amber-400/40 rounded-full px-3 py-1 hover:bg-amber-400/10 transition-colors">
+        ↻ Refresh
+      </button>
+    </div>
+
+    <!-- Match list container (filled by JS) -->
+    <div id="matches-container">
+      <div class="spinner"></div>
+    </div>
+  </div><!-- /tab-home -->
+
+  <!-- ══════════════════════════════════════
+       TAB: MATCH — Create a New Match
+       ══════════════════════════════════════ -->
+  <div id="tab-match" class="tab-panel">
+
+    <!-- Serial ID badge -->
+    <div class="flex items-center justify-between bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 mb-4 mt-1">
+      <span class="text-xs text-slate-400">အမှတ်စဉ်</span>
+      <span id="serial-display"
+            class="font-game font-bold text-amber-400 text-lg tracking-widest">
+        ········
+      </span>
+      <button onclick="refreshSerial()"
+              class="text-xs text-slate-400 hover:text-amber-400 transition-colors border border-slate-600 rounded-full px-2 py-0.5">
+        ↻
+      </button>
+    </div>
+
+    <!-- Form -->
+    <div class="flex flex-col gap-4">
+
+      <!-- Game ID (numbers only) -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">Game ID ဖြည့်ရန် <span class="text-rose-400">*</span></label>
+        <input id="game-id"
+               type="text"
+               inputmode="numeric"
+               pattern="[0-9]*"
+               placeholder="e.g. 123456789"
+               class="field"
+               oninput="this.value = this.value.replace(/[^0-9]/g, '')" />
+      </div>
+
+      <!-- Game Name (any language) -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">Game နာမည်ဖြည့်ရန် <span class="text-rose-400">*</span></label>
+        <input id="game-name"
+               type="text"
+               placeholder="e.g. NightOwl / ညဘုတ်"
+               class="field"
+               maxlength="60" />
+      </div>
+
+      <!-- Bet Amount chips -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-2">ပိုက်ဆံသတ်မှတ်ရန် <span class="text-rose-400">*</span></label>
+        <div class="bet-grid mb-2" id="bet-chips">
+          <div class="bet-chip" data-amount="5000"  onclick="selectBet(5000)">5,000</div>
+          <div class="bet-chip" data-amount="10000" onclick="selectBet(10000)">10,000</div>
+          <div class="bet-chip" data-amount="15000" onclick="selectBet(15000)">15,000</div>
+          <div class="bet-chip" data-amount="30000" onclick="selectBet(30000)">30,000</div>
+          <div class="bet-chip" data-amount="50000" onclick="selectBet(50000)">50,000</div>
+          <div class="bet-chip" data-amount="custom" onclick="selectBet('custom')">Custom</div>
+        </div>
+
+        <!-- Custom amount input (hidden until 'Custom' selected) -->
+        <div id="custom-bet-wrap" class="hidden">
+          <input id="custom-bet-amount"
+                 type="text"
+                 inputmode="numeric"
+                 pattern="[0-9]*"
+                 placeholder="ကိုယ်ပိုင်ပမာဏ ရိုက်ထည့်ပါ"
+                 class="field mt-1"
+                 oninput="onCustomBetInput()" />
+        </div>
+      </div>
+
+      <!-- Reward (read-only, auto-calculated) -->
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">ရရှိမည့်ငွေ (90% of pool)</label>
+        <input id="reward-display"
+               type="text"
+               class="field text-emerald-400 font-bold"
+               readonly
+               placeholder="— ကျပ်" />
+      </div>
+
+      <!-- Validation message -->
+      <p id="bet-error" class="text-rose-400 text-xs hidden"></p>
+
+      <!-- Submit button -->
+      <button id="create-match-btn"
+              onclick="createMatch()"
+              class="w-full py-3 rounded-xl font-bold text-base font-game tracking-wide
+                     bg-amber-500 hover:bg-amber-400 active:scale-[.98]
+                     text-slate-900 transition-all shadow-lg shadow-amber-500/20
+                     disabled:opacity-40 disabled:cursor-not-allowed">
+        ⚔️ match
+      </button>
+
+    </div>
+  </div><!-- /tab-match -->
+
+  <!-- ══════════════════════════════════════
+       TAB: HISTORY — Past Matches
+       ══════════════════════════════════════ -->
+  <div id="tab-history" class="tab-panel">
+    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📋 Match History</h2>
+    <div id="history-container">
+      <div class="spinner"></div>
+    </div>
+  </div><!-- /tab-history -->
+
+  <!-- ══════════════════════════════════════
+       TAB: UPLOAD — Evidence / Proof
+       ══════════════════════════════════════ -->
+  <div id="tab-upload" class="tab-panel">
+    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📤 Upload Result</h2>
+
+    <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 text-center mt-6">
+      <!-- Upload icon placeholder -->
+      <div class="w-16 h-16 rounded-full bg-slate-700 flex items-center justify-center mx-auto mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+             stroke-width="1.5" stroke="#94a3b8" class="w-8 h-8">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+      </div>
+      <p class="text-slate-300 text-sm font-semibold mb-1">ရလဒ် Screenshot တင်ရန်</p>
+      <p class="text-slate-500 text-xs mb-4">ဤ feature မကြာမီ ထွက်မည်</p>
+      <span class="inline-block bg-amber-400/10 border border-amber-400/30 text-amber-400
+                   text-xs rounded-full px-3 py-1">Coming Soon</span>
+    </div>
+  </div><!-- /tab-upload -->
+
+  <!-- ══════════════════════════════════════
+       BOTTOM NAVIGATION BAR
+       ══════════════════════════════════════ -->
+  <nav id="bottom-nav">
+
+    <!-- Home -->
+    <button class="nav-btn active" id="nav-home" onclick="switchTab('home')">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+           stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M2.25 12l8.954-8.955a1.5 1.5 0 012.092 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/>
+      </svg>
+      Home
+    </button>
+
+    <!-- Match -->
+    <button class="nav-btn" id="nav-match" onclick="switchTab('match')">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+           stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Match
+    </button>
+
+    <!-- History -->
+    <button class="nav-btn" id="nav-history" onclick="switchTab('history')">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+           stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      History
+    </button>
+
+    <!-- Upload -->
+    <button class="nav-btn" id="nav-upload" onclick="switchTab('upload')">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+           stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+      </svg>
+      Upload
+    </button>
+
+  </nav><!-- /bottom-nav -->
+
+</div><!-- /app -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 4 · JAVASCRIPT — All App Logic
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+"use strict";
+
+/* ──────────────────────────────────────────────────────────
+   CONFIG — change BACKEND_URL to your Render service URL
+   ────────────────────────────────────────────────────────── */
+const BACKEND_URL = "https://YOUR-RENDER-SERVICE.onrender.com";
+// ↑ e.g. "https://mlbb-backend.onrender.com"  — NO trailing slash
+
+/* ──────────────────────────────────────────────────────────
+   STATE — single source of truth for app data
+   ────────────────────────────────────────────────────────── */
+const STATE = {
+  telegramId:   null,   // string — Telegram user ID
+  username:     null,   // string — @username
+  balance:      0,      // integer — current wallet balance
+  currentTab:   "home", // active tab name
+  selectedBet:  null,   // number | 'custom' | null
+  serialId:     null,   // generated serial for current match form
+  hiddenMatchIds: new Set(), // locally hidden match IDs (UX only)
+};
+
+/* ──────────────────────────────────────────────────────────
+   SECTION A · INIT — Telegram WebApp + User Registration
+   ────────────────────────────────────────────────────────── */
+
+/**
+ * Called once DOM is ready.
+ * 1. Reads Telegram WebApp user data
+ * 2. Registers user with backend
+ * 3. Updates header UI
+ * 4. Loads Home tab data
+ */
+async function initApp() {
+  // ── 1. Get Telegram user ──
+  const tg   = window.Telegram?.WebApp;
+  const user = tg?.initDataUnsafe?.user;
+
+  if (user) {
+    STATE.telegramId = String(user.id);
+    STATE.username   = user.username || user.first_name || "Player";
+    tg.ready();          // tell Telegram the Mini App is ready
+    tg.expand();         // expand to full screen
+  } else {
+    // Not opened inside Telegram (e.g. browser preview)
+    STATE.telegramId = "preview_user";
+    STATE.username   = "PreviewUser";
+    showToast("⚠️ Telegram ထဲမှ ဖွင့်ပါ", "info");
+  }
+
+  // ── 2. Update header avatar & username ──
+  document.getElementById("display-username").textContent = "@" + STATE.username;
+  document.getElementById("avatar").textContent =
+    STATE.username.charAt(0).toUpperCase();
+
+  // ── 3. Register with backend ──
+  try {
+    const res = await apiFetch("/api/users/register", "POST", {
+      telegram_id: STATE.telegramId,
+      username:    STATE.username,
+    });
+    if (res.user) {
+      STATE.balance = res.user.balance;
+      updateBalanceUI();
+    }
+  } catch (err) {
+    console.error("[init] register failed:", err);
+    showToast("Server ချိတ်ဆက်မှု မအောင်မြင်", "error");
+  }
+
+  // ── 4. Generate serial + fetch home data ──
+  refreshSerial();
+  fetchMatches();
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION B · NAVIGATION — Tab Switching
+   ────────────────────────────────────────────────────────── */
+
+/**
+ * switchTab(tabName)
+ * Hides all panels, shows the requested one,
+ * and updates nav button active states.
+ */
+function switchTab(tabName) {
+  // Hide all panels
+  document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+  // Remove active from all nav buttons
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
+
+  // Show selected panel
+  const panel = document.getElementById("tab-" + tabName);
+  const navBtn = document.getElementById("nav-" + tabName);
+  if (panel) panel.classList.add("active");
+  if (navBtn) navBtn.classList.add("active");
+
+  STATE.currentTab = tabName;
+
+  // Lazy-load data per tab
+  if (tabName === "home")    fetchMatches();
+  if (tabName === "history") fetchHistory();
+  if (tabName === "match")   renderBetChips(); // re-render chips against latest balance
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION C · HOME TAB — Match Lobby
+   ────────────────────────────────────────────────────────── */
+
+/**
+ * fetchMatches()
+ * Fetches all pending matches from backend and renders cards.
+ */
+async function fetchMatches() {
+  const container = document.getElementById("matches-container");
+  container.innerHTML = '<div class="spinner"></div>';
+
+  try {
+    const data = await apiFetch("/api/matches", "GET");
+    const matches = (data.matches || []).filter(
+      (m) => !STATE.hiddenMatchIds.has(m.id)
+    );
+    renderMatches(matches);
+  } catch (err) {
+    console.error("[fetchMatches]", err);
+    container.innerHTML = `
+      <div class="text-center py-10 text-slate-500 text-sm">
+        <p class="text-2xl mb-2">⚠️</p>
+        <p>Server ချိတ်ဆက်မှု မအောင်မြင်</p>
+        <button onclick="fetchMatches()"
+                class="mt-3 text-xs text-amber-400 border border-amber-400/30 rounded-full px-3 py-1">
+          ↻ ထပ်ကြိုးစားရန်
+        </button>
+      </div>`;
+  }
+}
+
+/**
+ * renderMatches(matches)
+ * Builds card HTML for each match and injects into DOM.
+ */
+function renderMatches(matches) {
+  const container = document.getElementById("matches-container");
+
+  if (!matches || matches.length === 0) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-500">
+        <div class="text-4xl mb-3">🎮</div>
+        <p class="text-base font-semibold text-slate-400">ပွဲစဉ်မရှိသေးပါ</p>
+        <p class="text-xs text-slate-600 mt-1">Match တစ်ခု ဖန်တီးပါ</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = matches.map((m) => {
+    const isOwn = m.creator_id === STATE.telegramId;
+    return `
+    <div class="match-card fade-in" id="card-${m.id}">
+      <!-- Card header: serial + creator -->
+      <div class="flex items-center justify-between mb-3">
+        <span class="font-game font-bold text-amber-400 text-sm tracking-wider">${escHtml(m.serial_id)}</span>
+        <span class="text-xs text-slate-500">@${escHtml(m.creator_username || "unknown")}</span>
+      </div>
+
+      <!-- Card info rows -->
+      <div class="grid grid-cols-2 gap-y-1.5 text-sm mb-3">
+        <span class="text-slate-400 text-xs">Game ID</span>
+        <span class="text-slate-100 font-semibold text-right text-xs">${escHtml(m.game_id)}</span>
+
+        <span class="text-slate-400 text-xs">Game Name</span>
+        <span class="text-slate-100 font-semibold text-right text-xs truncate">${escHtml(m.game_name)}</span>
+
+        <span class="text-slate-400 text-xs">အမှတ်စဉ်</span>
+        <span class="text-slate-100 font-semibold text-right text-xs">${escHtml(m.serial_id)}</span>
+
+        <span class="text-slate-400 text-xs">ကြေး</span>
+        <span class="text-amber-400 font-bold text-right text-xs">${formatAmount(m.bet_amount)} ကျပ်</span>
+
+        <span class="text-slate-400 text-xs">ရရှိ</span>
+        <span class="text-emerald-400 font-bold text-right text-xs">${formatAmount(m.reward_amount)} ကျပ်</span>
+      </div>
+
+      <!-- Card action buttons -->
+      <div class="flex gap-2">
+        ${isOwn
+          ? `<button onclick="hideMatch('${m.id}')"
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game
+                            bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">
+               Hide
+             </button>
+             <button disabled
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game
+                            bg-slate-800 text-slate-600 cursor-not-allowed">
+               Your Match
+             </button>`
+          : `<button onclick="hideMatchLocally('${m.id}')"
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game
+                            bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">
+               Hide
+             </button>
+             <button onclick="playMatch('${m.id}', ${m.bet_amount})"
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game
+                            bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors
+                            active:scale-95 shadow-md shadow-amber-500/20">
+               ▶ Play
+             </button>`
+        }
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/**
+ * playMatch(matchId, betAmount)
+ * User 2 joins a match. Backend validates balance before deducting.
+ */
+async function playMatch(matchId, betAmount) {
+  if (!STATE.telegramId) return;
+
+  // Quick client-side balance pre-check
+  if (STATE.balance < betAmount) {
+    showToast("Insufficient balance to join", "error");
+    return;
+  }
+
+  if (!confirm(`ကြေး ${formatAmount(betAmount)} ကျပ် ဖြင့် ဝင်ကစားမည်လား?`)) return;
+
+  setButtonLoading(`card-${matchId}`, ".play-btn", true);
+
+  try {
+    const res = await apiFetch("/api/matches/join", "POST", {
+      telegram_id: STATE.telegramId,
+      match_id:    matchId,
+    });
+
+    STATE.balance = res.new_balance;
+    updateBalanceUI();
+    showToast("✅ Match ဝင်ပြီ!", "success");
+    // Remove card from lobby
+    STATE.hiddenMatchIds.add(matchId);
+    fetchMatches();
+  } catch (err) {
+    showToast(err.message || "Insufficient balance to join", "error");
+  }
+}
+
+/**
+ * hideMatch(matchId) — creator cancels/refunds their own match
+ */
+async function hideMatch(matchId) {
+  if (!confirm("Match ကိုဖျက်ပြီး ကြေးအပြည့်ပြန်ရမည်လား?")) return;
+
+  try {
+    const res = await apiFetch("/api/matches/hide", "POST", {
+      telegram_id: STATE.telegramId,
+      match_id:    matchId,
+    });
+    STATE.balance = res.new_balance;
+    updateBalanceUI();
+    showToast("Match ပယ်ဖျက်ပြီ — ကြေးပြန်ရသည်", "info");
+    STATE.hiddenMatchIds.add(matchId);
+    fetchMatches();
+  } catch (err) {
+    showToast(err.message || "Hide မအောင်မြင်", "error");
+  }
+}
+
+/**
+ * hideMatchLocally(matchId) — hides card for THIS user only (no API)
+ */
+function hideMatchLocally(matchId) {
+  STATE.hiddenMatchIds.add(matchId);
+  const card = document.getElementById("card-" + matchId);
+  if (card) card.remove();
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION D · MATCH TAB — Create Match Form
+   ────────────────────────────────────────────────────────── */
+
+/**
+ * generateSerial() — creates an 8-char alphanumeric ID client-side
+ * (server generates its own authoritative one on submit)
+ */
+function generateSerial() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let id = "";
+  for (let i = 0; i < 8; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+/**
+ * refreshSerial() — regenerates and displays the serial badge
+ */
+function refreshSerial() {
+  STATE.serialId = generateSerial();
+  const el = document.getElementById("serial-display");
+  if (el) {
+    el.classList.remove("fade-in");
+    void el.offsetWidth; // trigger reflow
+    el.textContent = STATE.serialId;
+    el.classList.add("fade-in");
+  }
+}
+
+/**
+ * selectBet(amount) — handles bet chip selection + validation
+ */
+function selectBet(amount) {
+  STATE.selectedBet = amount;
+
+  // Update chip styles
+  document.querySelectorAll(".bet-chip").forEach((c) => c.classList.remove("selected"));
+  const chip = document.querySelector(`.bet-chip[data-amount="${amount}"]`);
+  if (chip) chip.classList.add("selected");
+
+  // Toggle custom input
+  const customWrap = document.getElementById("custom-bet-wrap");
+  if (amount === "custom") {
+    customWrap.classList.remove("hidden");
+    document.getElementById("custom-bet-amount").focus();
+    updateReward(0);
+  } else {
+    customWrap.classList.add("hidden");
+    updateReward(amount);
+    validateSelectedBet(amount);
+  }
+}
+
+/**
+ * onCustomBetInput() — called on every keystroke in custom field
+ */
+function onCustomBetInput() {
+  const val = parseInt(document.getElementById("custom-bet-amount").value, 10);
+  if (!isNaN(val) && val > 0) {
+    updateReward(val);
+    validateSelectedBet(val);
+  } else {
+    updateReward(0);
+  }
+}
+
+/**
+ * validateSelectedBet(amount) — checks against user balance
+ * Returns true if valid.
+ */
+function validateSelectedBet(amount) {
+  const errEl = document.getElementById("bet-error");
+  if (amount > STATE.balance) {
+    errEl.textContent = `⚠️ Balance မလုံလောက် (လက်ကျန်: ${formatAmount(STATE.balance)} ကျပ်)`;
+    errEl.classList.remove("hidden");
+    return false;
+  }
+  errEl.classList.add("hidden");
+  return true;
+}
+
+/**
+ * updateReward(betAmount) — computes & displays reward in read-only field
+ */
+function updateReward(betAmount) {
+  const reward = Math.floor(betAmount * 2 * 0.9);
+  const el = document.getElementById("reward-display");
+  if (el) el.value = betAmount > 0 ? formatAmount(reward) + " ကျပ်" : "";
+}
+
+/**
+ * renderBetChips() — re-renders chips disabling those > balance
+ * Called when switching to Match tab to reflect latest balance.
+ */
+function renderBetChips() {
+  const amounts = [5000, 10000, 15000, 30000, 50000];
+  amounts.forEach((amt) => {
+    const chip = document.querySelector(`.bet-chip[data-amount="${amt}"]`);
+    if (!chip) return;
+    if (STATE.balance < amt) {
+      chip.classList.add("disabled");
+    } else {
+      chip.classList.remove("disabled");
+    }
+  });
+}
+
+/**
+ * createMatch() — validates + submits match creation to backend
+ */
+async function createMatch() {
+  const gameId   = document.getElementById("game-id").value.trim();
+  const gameName = document.getElementById("game-name").value.trim();
+  const btn      = document.getElementById("create-match-btn");
+
+  // ── Client validations ──
+  if (!gameId) {
+    showToast("Game ID ဖြည့်ပါ", "error"); return;
+  }
+  if (!/^\d+$/.test(gameId)) {
+    showToast("Game ID ဂဏန်းသာ ဖြည့်ပါ", "error"); return;
+  }
+  if (!gameName) {
+    showToast("Game နာမည် ဖြည့်ပါ", "error"); return;
+  }
+
+  let betAmount = STATE.selectedBet;
+  if (betAmount === "custom") {
+    betAmount = parseInt(document.getElementById("custom-bet-amount").value, 10);
+  }
+  if (!betAmount || isNaN(betAmount) || betAmount <= 0) {
+    showToast("ကြေးပမာဏ ရွေးပါ", "error"); return;
+  }
+  if (!validateSelectedBet(betAmount)) return;
+
+  // ── Submit ──
+  btn.disabled = true;
+  btn.textContent = "⏳ Creating...";
+
+  try {
+    const res = await apiFetch("/api/matches/create", "POST", {
+      telegram_id: STATE.telegramId,
+      game_id:     gameId,
+      game_name:   gameName,
+      bet_amount:  betAmount,
+    });
+
+    STATE.balance = res.new_balance;
+    updateBalanceUI();
+
+    // Show confirmed serial from server
+    const confirmedSerial = res.match.serial_id;
+    document.getElementById("serial-display").textContent = confirmedSerial;
+
+    showToast("✅ Match ဖန်တီးပြီ!", "success");
+
+    // Reset form
+    document.getElementById("game-id").value   = "";
+    document.getElementById("game-name").value = "";
+    document.getElementById("reward-display").value = "";
+    document.querySelectorAll(".bet-chip").forEach((c) => c.classList.remove("selected"));
+    document.getElementById("custom-bet-wrap").classList.add("hidden");
+    STATE.selectedBet = null;
+
+    // Re-generate serial for next match
+    setTimeout(refreshSerial, 600);
+
+    // Switch to Home to see the new match
+    setTimeout(() => switchTab("home"), 1200);
+
+  } catch (err) {
+    showToast(err.message || "Match ဖန်တီးမရ", "error");
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = "⚔️ match";
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION E · HISTORY TAB
+   ────────────────────────────────────────────────────────── */
+
+async function fetchHistory() {
+  const container = document.getElementById("history-container");
+  if (!STATE.telegramId) return;
+  container.innerHTML = '<div class="spinner"></div>';
+
+  try {
+    const data = await apiFetch(`/api/matches/history/${STATE.telegramId}`, "GET");
+    renderHistory(data.matches || []);
+  } catch (err) {
+    container.innerHTML = `<p class="text-slate-500 text-sm text-center py-8">History မရ — ထပ်ကြိုးစားပါ</p>`;
+  }
+}
+
+function renderHistory(matches) {
+  const container = document.getElementById("history-container");
+  if (!matches.length) {
+    container.innerHTML = `
+      <div class="text-center py-12 text-slate-500">
+        <p class="text-3xl mb-2">📭</p>
+        <p class="text-sm">Match မကစားရသေးပါ</p>
+      </div>`;
+    return;
+  }
+
+  const statusColor = {
+    pending: "text-amber-400",
+    active:  "text-blue-400",
+    done:    "text-emerald-400",
+    hidden:  "text-slate-500",
+  };
+  const statusLabel = {
+    pending: "Pending",
+    active:  "Playing",
+    done:    "Done",
+    hidden:  "Cancelled",
+  };
+
+  container.innerHTML = matches.map((m) => `
+    <div class="match-card fade-in">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-game font-bold text-amber-400 text-sm">${escHtml(m.serial_id)}</span>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-slate-700 ${statusColor[m.status] || "text-slate-400"}">
+          ${statusLabel[m.status] || m.status}
+        </span>
+      </div>
+      <div class="grid grid-cols-2 gap-y-1 text-xs">
+        <span class="text-slate-400">Game ID</span>
+        <span class="text-right text-slate-200">${escHtml(m.game_id)}</span>
+        <span class="text-slate-400">Game Name</span>
+        <span class="text-right text-slate-200 truncate">${escHtml(m.game_name)}</span>
+        <span class="text-slate-400">ကြေး</span>
+        <span class="text-right text-amber-400 font-semibold">${formatAmount(m.bet_amount)} ကျပ်</span>
+        <span class="text-slate-400">ရရှိ</span>
+        <span class="text-right text-emerald-400 font-semibold">${formatAmount(m.reward_amount)} ကျပ်</span>
+        <span class="text-slate-400">Role</span>
+        <span class="text-right text-slate-300">${m.creator_id === STATE.telegramId ? "Creator" : "Joiner"}</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION F · UTILITY FUNCTIONS
+   ────────────────────────────────────────────────────────── */
+
+/**
+ * apiFetch(path, method, body)
+ * Wrapper around fetch() for all API calls.
+ * Throws an Error with the server's error message on failure.
+ */
+async function apiFetch(path, method = "GET", body = null) {
+  const opts = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  const res  = await fetch(BACKEND_URL + path, opts);
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+/**
+ * showToast(message, type)
+ * Types: 'success' | 'error' | 'info'
+ * Auto-hides after 3 seconds.
+ */
+let _toastTimer = null;
+function showToast(message, type = "info") {
+  const el = document.getElementById("toast");
+  el.textContent = message;
+  el.className   = `show ${type}`;
+
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    el.className = "";
+  }, 3000);
+}
+
+/**
+ * updateBalanceUI() — refreshes all balance displays in header
+ */
+function updateBalanceUI() {
+  const el = document.getElementById("display-balance");
+  if (el) el.textContent = formatAmount(STATE.balance);
+}
+
+/**
+ * formatAmount(n) — adds thousands separators
+ * e.g.  10000 → "10,000"
+ */
+function formatAmount(n) {
+  return Number(n || 0).toLocaleString("en-US");
+}
+
+/**
+ * escHtml(str) — prevents XSS in dynamic card content
+ */
+function escHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * setButtonLoading(cardId, selector, loading)
+ * Disables/enables a button inside a card.
+ */
+function setButtonLoading(cardId, selector, loading) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  const btn = card.querySelector(selector);
+  if (btn) btn.disabled = loading;
+}
+
+/**
+ * showComingSoon(feature) — placeholder for AddFunds / Withdrawal
+ */
+function showComingSoon(feature) {
+  showToast(`${feature} feature မကြာမီ ထွက်မည်`, "info");
+}
+
+/* ──────────────────────────────────────────────────────────
+   SECTION G · BOOT — Run initApp on DOM ready
+   ────────────────────────────────────────────────────────── */
+document.addEventListener("DOMContentLoaded", initApp);
+
+</script>
+<!-- ═══════════ END OF SCRIPT ═══════════ -->
+</body>
+</html>
