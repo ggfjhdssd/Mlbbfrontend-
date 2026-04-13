@@ -289,13 +289,10 @@ const tg = window.Telegram?.WebApp;
 if (tg) { tg.expand(); tg.ready(); }
 
 async function initAdmin() {
-  // Try to restore session
-  const saved = sessionStorage.getItem("adminId");
-  if (saved) {
-    adminId = parseInt(saved);
-    showApp();
-    return;
-  }
+  // ── Security: sessionStorage bypass ပိတ်သည် ──────────────────
+  // sessionStorage.getItem("adminId") ကို တိုက်ရိုက် trust မလုပ်ပါ။
+  // Telegram Mini App မှ initDataUnsafe.user.id ကိုသာ verify လုပ်သည်။
+  // Manual input ဖြင့် စစ်မည် (session restore ကို ဖယ်ထားသည်)。
 
   // If opened as Telegram Mini App, auto-fill ID and verify
   const tgUser = tg?.initDataUnsafe?.user;
@@ -305,7 +302,7 @@ async function initAdmin() {
     return;
   }
 
-  // Show auth screen for manual entry
+  // Show auth screen for manual entry (browser testing / fallback)
   document.getElementById("auth-screen").style.display = "flex";
 }
 
@@ -327,7 +324,7 @@ async function doAdminVerify() {
     const d = await r.json();
     if (!r.ok || !d.ok) { showAuthErr(d.error || "Admin မဟုတ်ပါ"); return; }
     adminId = d.adminId;
-    sessionStorage.setItem("adminId", adminId);
+    // ⚠️ sessionStorage.setItem ကို ဖယ်ထားသည် — page refresh တိုင်း re-verify လုပ်မည်
     showApp();
   } catch {
     showAuthErr("Server ချိတ်ဆက်မှု မအောင်မြင်");
