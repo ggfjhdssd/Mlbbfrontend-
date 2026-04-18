@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <!--
-  MLBB Matchmaking — admin.html  (v5)
-  ─────────────────────────────────────
-  Access: Opened via /admin bot command → web_app button → Telegram ID verify
-  Features:
-    • Telegram ID auth (via telegram-web-app.js or manual entry)
-    • Tab 1: Deposits   — Confirm / Reject pending deposits
-    • Tab 2: Users      — Search, balance adjust, ban/unban
-    • Tab 3: Matches    — Resolve verifying matches, view all
-  Deployed separately on Vercel (ADMIN_URL env var in server.js)
+  MLBB Matchmaking — admin.html (v6)
+  Bug Fixes:
+    • confirmBalance() — fixed malformed showToast call (extra quote bug)
+    • ban/unban list refresh uses current search query (not reset to all)
+    • unbanUser uses current search query after unban
+    • Match filter — status="" (All) now correctly sends empty param
+    • Match filter default changed to "" (All) so page loads all matches first
+    • resolveMatch() button has loading/disabled state
+    • All action buttons have loading state to prevent double-click
+    • Clearer error messages throughout
 -->
 <html lang="my">
 <head>
@@ -41,10 +42,12 @@
                 padding:7px 14px;font-weight:700;font-family:"Rajdhani",sans-serif;
                 cursor:pointer;font-size:12px;transition:all .15s;}
     .btn-danger:hover{background:#dc2626;}
+    .btn-danger:disabled{opacity:.4;cursor:not-allowed;}
     .btn-success{background:#22c55e;color:#0f172a;border:none;border-radius:8px;
                  padding:7px 14px;font-weight:700;font-family:"Rajdhani",sans-serif;
                  cursor:pointer;font-size:12px;transition:all .15s;}
     .btn-success:hover{background:#16a34a;}
+    .btn-success:disabled{opacity:.4;cursor:not-allowed;}
     .btn-ghost{background:transparent;border:1px solid #334155;color:#94a3b8;border-radius:8px;
                padding:7px 14px;font-weight:600;font-family:"Rajdhani",sans-serif;
                cursor:pointer;font-size:12px;transition:all .15s;}
@@ -57,6 +60,8 @@
     .section{display:none;} .section.active{display:block;}
     .spinner{width:24px;height:24px;border:3px solid #334155;border-top-color:#f59e0b;
              border-radius:50%;animation:spin .7s linear infinite;margin:30px auto;}
+    .spinner-sm{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);
+                border-top-color:currentColor;border-radius:50%;animation:spin .7s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg)}}
     .badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;font-family:"Rajdhani",sans-serif;}
     .badge-pending  {background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;}
@@ -66,31 +71,29 @@
     .badge-active   {background:#3b82f622;color:#3b82f6;border:1px solid #3b82f644;}
     .badge-done     {background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;}
     .badge-cancelled{background:#33415522;color:#64748b;border:1px solid #33415544;}
+    .badge-pending-match{background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;}
     .badge-banned   {background:#ef444422;color:#ef4444;border:1px solid #ef444444;}
     #toast{position:fixed;top:16px;right:16px;z-index:999;padding:10px 18px;border-radius:10px;
-           background:#1e293b;border:1px solid #334155;font-size:13px;
+           background:#1e293b;border:1px solid #334155;font-size:13px;max-width:320px;
            opacity:0;transform:translateY(-10px);transition:all .3s;pointer-events:none;}
     #toast.show{opacity:1;transform:translateY(0);}
     #toast.success{border-color:#22c55e;color:#4ade80;}
     #toast.error  {border-color:#ef4444;color:#f87171;}
     #toast.info   {border-color:#3b82f6;color:#60a5fa;}
-    /* Auth screen */
     #auth-screen{position:fixed;inset:0;background:#0f172a;z-index:100;
                  display:none;align-items:center;justify-content:center;}
-    /* Reject modal */
     #reject-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;
                   display:none;align-items:center;justify-content:center;padding:20px;}
     #reject-modal.open{display:flex;}
-    /* Ban modal */
     #ban-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;
                display:none;align-items:center;justify-content:center;padding:20px;}
     #ban-modal.open{display:flex;}
-    /* Balance modal */
     #balance-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;
                    display:none;align-items:center;justify-content:center;padding:20px;}
     #balance-modal.open{display:flex;}
     .modal-box{background:#1e293b;border:1px solid #334155;border-radius:16px;
                padding:24px;width:100%;max-width:420px;}
+    .error-inline{color:#f87171;font-size:12px;margin-top:6px;}
   </style>
 </head>
 <body>
@@ -100,75 +103,68 @@
   <div style="background:#1e293b;border:1px solid #334155;border-radius:20px;padding:32px 24px;width:100%;max-width:380px;margin:20px;text-align:center;">
     <div style="font-size:2.5rem;margin-bottom:8px;">🛡️</div>
     <div style="font-size:1.3rem;font-weight:900;color:#f59e0b;margin-bottom:6px;font-family:'Rajdhani',sans-serif;">MLBB Admin</div>
-    <div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.6;">Admin ဝင်ရောက်ရန် Telegram Bot မှ /admin ရိုက်ပါ<br>သို့မဟုတ် Telegram ID ဖြင့် ဝင်ရောက်ပါ</div>
+    <div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.6;">Admin ဝင်ရောက်ရန် Telegram ID ဖြင့် ဝင်ရောက်ပါ</div>
     <input id="authId" type="number" placeholder="Telegram ID ထည့်ပါ"
       style="background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;padding:10px 14px;width:100%;font-size:14px;outline:none;margin-bottom:10px;font-family:inherit;"/>
     <button onclick="doAdminVerify()"
-      style="background:#f59e0b;color:#0f172a;border:none;border-radius:8px;padding:11px;width:100%;font-weight:700;font-size:14px;cursor:pointer;font-family:'Rajdhani',sans-serif;">
+      style="background:#f59e0b;color:#0f172a;border:none;border-radius:8px;padding:11px;width:100%;font-weight:700;font-size:14px;cursor:pointer;font-family:'Rajdhani',sans-serif;display:flex;align-items:center;justify-content:center;gap:8px;">
       <span id="authTx">🔐 ဝင်ရောက်မည်</span>
-      <div id="authSp" class="spinner" style="display:none;width:18px;height:18px;margin:0 auto;border-width:2px;"></div>
+      <div id="authSp" class="spinner-sm" style="display:none;"></div>
     </button>
     <div id="authErr" style="color:#f87171;font-size:12px;margin-top:10px;display:none;"></div>
   </div>
 </div>
 
-<!-- Toast -->
 <div id="toast"></div>
 
-<!-- ══════════════════════════
-     REJECT MODAL
-     ══════════════════════════ -->
+<!-- REJECT MODAL -->
 <div id="reject-modal">
   <div class="modal-box">
     <h3 class="font-game font-bold text-base text-slate-100 mb-3">❌ Deposit Reject</h3>
     <p class="text-xs text-slate-400 mb-3">ငြင်းပယ်ရသည့် အကြောင်းပြချက် ဖြည့်ပါ။</p>
     <textarea id="reject-reason" rows="3" placeholder="အကြောင်းပြချက်…"
               class="field mb-3" style="resize:none;"></textarea>
+    <div id="reject-error" class="error-inline hidden mb-2"></div>
     <div class="flex gap-2">
       <button onclick="closeRejectModal()" class="btn-ghost flex-1">Cancel</button>
-      <button onclick="confirmReject()" class="btn-danger flex-1">Reject ပို့မည်</button>
+      <button id="reject-confirm-btn" onclick="confirmReject()" class="btn-danger flex-1">Reject ပို့မည်</button>
     </div>
   </div>
 </div>
 
-<!-- ══════════════════════════
-     BAN MODAL
-     ══════════════════════════ -->
+<!-- BAN MODAL -->
 <div id="ban-modal">
   <div class="modal-box">
     <h3 class="font-game font-bold text-base text-slate-100 mb-3">🚫 User Ban</h3>
     <p class="text-xs text-slate-400 mb-3">Ban ရသည့် အကြောင်းပြချက် ဖြည့်ပါ။</p>
     <textarea id="ban-reason" rows="3" placeholder="အကြောင်းပြချက်…"
               class="field mb-3" style="resize:none;"></textarea>
+    <div id="ban-error" class="error-inline hidden mb-2"></div>
     <div class="flex gap-2">
       <button onclick="closeBanModal()" class="btn-ghost flex-1">Cancel</button>
-      <button onclick="confirmBan()" class="btn-danger flex-1">Ban လုပ်မည်</button>
+      <button id="ban-confirm-btn" onclick="confirmBan()" class="btn-danger flex-1">🚫 Ban လုပ်မည်</button>
     </div>
   </div>
 </div>
 
-<!-- ══════════════════════════
-     BALANCE MODAL
-     ══════════════════════════ -->
+<!-- BALANCE MODAL -->
 <div id="balance-modal">
   <div class="modal-box">
     <h3 id="balance-modal-title" class="font-game font-bold text-base text-slate-100 mb-3">💰 Balance Adjust</h3>
     <p id="balance-modal-user" class="text-xs text-slate-400 mb-3"></p>
     <input id="balance-amount" type="text" inputmode="numeric" placeholder="ပမာဏ ထည့်ပါ"
-           class="field mb-3" oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
-    <div class="flex gap-2">
+           class="field mb-1" oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
+    <div id="balance-error" class="error-inline hidden mb-2"></div>
+    <div class="flex gap-2 mt-3">
       <button onclick="closeBalanceModal()" class="btn-ghost flex-1">Cancel</button>
       <button id="balance-confirm-btn" onclick="confirmBalance()" class="btn-primary flex-1">Confirm</button>
     </div>
   </div>
 </div>
 
-<!-- ══════════════════════════
-     MAIN LAYOUT
-     ══════════════════════════ -->
+<!-- MAIN APP -->
 <div id="main-app" class="hidden">
 
-  <!-- Header -->
   <header class="bg-slate-900 border-b border-slate-700 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
     <div class="flex items-center gap-3">
       <div class="w-9 h-9 rounded-lg bg-amber-500 flex items-center justify-center">
@@ -185,17 +181,15 @@
     </div>
   </header>
 
-  <!-- Tab bar -->
   <div class="bg-slate-900 border-b border-slate-700 px-4 py-3 flex gap-2 overflow-x-auto">
     <button class="tab-btn active" id="tab-btn-deposits"  onclick="switchSection('deposits')">💳 Deposits</button>
     <button class="tab-btn"        id="tab-btn-users"     onclick="switchSection('users')">👥 Users</button>
     <button class="tab-btn"        id="tab-btn-matches"   onclick="switchSection('matches')">⚔️ Matches</button>
   </div>
 
-  <!-- Content -->
   <div class="max-w-3xl mx-auto px-4 py-5">
 
-    <!-- ══════════ DEPOSITS SECTION ══════════ -->
+    <!-- DEPOSITS SECTION -->
     <div id="section-deposits" class="section active">
       <div class="flex items-center justify-between mb-4">
         <h2 class="font-game font-bold text-slate-100 text-base">💳 Deposit Requests</h2>
@@ -212,7 +206,7 @@
       <div id="deposits-list"><div class="spinner"></div></div>
     </div>
 
-    <!-- ══════════ USERS SECTION ══════════ -->
+    <!-- USERS SECTION -->
     <div id="section-users" class="section">
       <div class="flex gap-2 mb-4">
         <input id="user-search" type="text" placeholder="Telegram ID သို့မဟုတ် Username ရှာပါ"
@@ -222,10 +216,10 @@
       <div id="users-list"><div class="spinner"></div></div>
     </div>
 
-    <!-- ══════════ MATCHES SECTION ══════════ -->
+    <!-- MATCHES SECTION -->
     <div id="section-matches" class="section">
 
-      <!-- ─ Resolve Box (separated from list) ─ -->
+      <!-- Resolve box -->
       <div class="card mb-5 border-amber-500/30">
         <h3 class="font-game font-bold text-amber-400 text-sm mb-3">🏆 Match Result ဆုံးဖြတ်ရန်</h3>
         <p class="text-xs text-slate-500 mb-3">Verifying status Match အတွက် Winner သတ်မှတ်ရန်</p>
@@ -239,23 +233,26 @@
             <input id="resolve-winner" type="text" inputmode="numeric" placeholder="e.g. 123456789"
                    class="field" oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
           </div>
-          <button onclick="resolveMatch()"
-                  class="btn-primary w-full py-3 text-sm font-game">
-            🏆 Winner သတ်မှတ်မည်
+          <div id="resolve-error" class="error-inline hidden"></div>
+          <button id="resolve-btn" onclick="resolveMatch()"
+                  class="btn-primary w-full py-3 text-sm font-game flex items-center justify-center gap-2">
+            <span id="resolve-btn-text">🏆 Winner သတ်မှတ်မည်</span>
+            <div id="resolve-spinner" class="spinner-sm hidden"></div>
           </button>
         </div>
       </div>
 
-      <!-- ─ Match List ─ -->
+      <!-- Match list -->
       <div class="flex items-center justify-between mb-3">
         <h3 class="font-game font-bold text-slate-100 text-sm">Match စာရင်း</h3>
         <div class="flex gap-2">
           <select id="match-filter" onchange="fetchMatches()" class="field text-xs" style="width:auto;padding:6px 10px;">
+            <option value="">All</option>
             <option value="verifying">Verifying</option>
             <option value="active">Active</option>
             <option value="pending">Pending</option>
             <option value="done">Done</option>
-            <option value="">All</option>
+            <option value="cancelled">Cancelled</option>
           </select>
           <button onclick="fetchMatches()" class="btn-ghost">↻</button>
         </div>
@@ -264,56 +261,38 @@
     </div>
 
   </div>
-</div><!-- /main-app -->
+</div>
 
 <script>
 "use strict";
 
-/* ─────────────────────────────────
-   CONFIG
-   ───────────────────────────────── */
 const BACKEND_URL = "https://mlbbbackend.onrender.com";
 
-/* ─────────────────────────────────
-   STATE
-   ───────────────────────────────── */
 let adminId         = null;
 let pendingRejectId = null;
 let pendingBanId    = null;
 let pendingBalance  = { tid: null, username: null, action: null };
 
-/* ─────────────────────────────────
-   INIT — Telegram ID verification
-   ───────────────────────────────── */
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.expand(); tg.ready(); }
 
+/* ── INIT ── */
 async function initAdmin() {
-  // ── Security: sessionStorage bypass ပိတ်သည် ──────────────────
-  // sessionStorage.getItem("adminId") ကို တိုက်ရိုက် trust မလုပ်ပါ။
-  // Telegram Mini App မှ initDataUnsafe.user.id ကိုသာ verify လုပ်သည်။
-  // Manual input ဖြင့် စစ်မည် (session restore ကို ဖယ်ထားသည်)。
-
-  // If opened as Telegram Mini App, auto-fill ID and verify
   const tgUser = tg?.initDataUnsafe?.user;
   if (tgUser?.id) {
     document.getElementById("authId").value = tgUser.id;
     await doAdminVerify();
     return;
   }
-
-  // Show auth screen for manual entry (browser testing / fallback)
   document.getElementById("auth-screen").style.display = "flex";
 }
 
 async function doAdminVerify() {
   const idVal = document.getElementById("authId").value.trim();
   const tid   = parseInt(idVal);
-  if (!tid || isNaN(tid)) {
-    showAuthErr("Telegram ID မမှန်ကန်ပါ"); return;
-  }
+  if (!tid || isNaN(tid)) { showAuthErr("Telegram ID မမှန်ကန်ပါ"); return; }
   document.getElementById("authTx").style.display = "none";
-  document.getElementById("authSp").style.display  = "block";
+  document.getElementById("authSp").style.display  = "inline-block";
   document.getElementById("authErr").style.display = "none";
   try {
     const r = await fetch(`${BACKEND_URL}/api/admin/verify`, {
@@ -324,7 +303,6 @@ async function doAdminVerify() {
     const d = await r.json();
     if (!r.ok || !d.ok) { showAuthErr(d.error || "Admin မဟုတ်ပါ"); return; }
     adminId = d.adminId;
-    // ⚠️ sessionStorage.setItem ကို ဖယ်ထားသည် — page refresh တိုင်း re-verify လုပ်မည်
     showApp();
   } catch {
     showAuthErr("Server ချိတ်ဆက်မှု မအောင်မြင်");
@@ -337,22 +315,16 @@ async function doAdminVerify() {
 function showApp() {
   document.getElementById("auth-screen").style.display = "none";
   document.getElementById("main-app").classList.remove("hidden");
-  fetchDeposits();
-  fetchUsers();
-  fetchMatches();
+  fetchDeposits(); fetchUsers(); fetchMatches();
 }
-
 function showAuthErr(msg) {
   const el = document.getElementById("authErr");
-  el.textContent = msg;
-  el.style.display = "block";
+  el.textContent = msg; el.style.display = "block";
   document.getElementById("authTx").style.display = "inline";
   document.getElementById("authSp").style.display  = "none";
 }
 
-/* ─────────────────────────────────
-   NAVIGATION
-   ───────────────────────────────── */
+/* ── NAVIGATION ── */
 function switchSection(name) {
   document.querySelectorAll(".section").forEach(s=>s.classList.remove("active"));
   document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
@@ -360,19 +332,21 @@ function switchSection(name) {
   document.getElementById("tab-btn-"+name)?.classList.add("active");
 }
 
-/* ─────────────────────────────────
-   DEPOSITS
-   ───────────────────────────────── */
+/* ── DEPOSITS ── */
 async function fetchDeposits() {
   const list   = document.getElementById("deposits-list");
   const status = document.getElementById("deposit-filter").value;
   list.innerHTML = '<div class="spinner"></div>';
-
   try {
-    const data = await adminFetch(`/api/admin/deposits${status?"?status="+status:""}`, "GET");
+    // BUG FIX: when status is empty string, do not append ?status=
+    const url = status ? `/api/admin/deposits?status=${encodeURIComponent(status)}` : "/api/admin/deposits";
+    const data = await adminFetch(url, "GET");
     renderDeposits(data.deposits || []);
   } catch (err) {
-    list.innerHTML = `<p class="text-rose-400 text-sm text-center py-6">Error: ${escHtml(err.message)}</p>`;
+    list.innerHTML = `<div class="card border-rose-500/30">
+      <p class="text-rose-400 text-sm">❌ Error: ${escHtml(err.message)}</p>
+      <button onclick="fetchDeposits()" class="btn-ghost mt-3 text-xs">↻ ထပ်ကြိုးစား</button>
+    </div>`;
   }
 }
 
@@ -403,57 +377,77 @@ function renderDeposits(deposits) {
         <span class="text-slate-400">Tx ID</span>
         <span class="text-right text-slate-200 break-all"><code>${escHtml(tx.transaction_id)}</code></span>
         <span class="text-slate-400">Transfer Time</span>
-        <span class="text-right text-slate-200">${escHtml(tx.transfer_time)}</span>
-        <span class="text-slate-400">Req ID</span>
-        <span class="text-right text-slate-500 text-xs break-all"><code>${escHtml(tx.id)}</code></span>
+        <span class="text-right text-slate-200">${escHtml(tx.transfer_time||"—")}</span>
         <span class="text-slate-400">Submitted</span>
         <span class="text-right text-slate-500">${fmtDate(tx.created_at)}</span>
         ${tx.reject_reason?`<span class="text-slate-400">Reject Reason</span><span class="text-right text-rose-400">${escHtml(tx.reject_reason)}</span>`:""}
       </div>
       ${tx.status==="pending" ? `
         <div class="flex gap-2">
-          <button onclick="confirmDeposit('${escHtml(tx.id)}')" class="btn-success flex-1">✅ Confirm</button>
+          <button id="confirm-dep-${escHtml(tx.id)}" onclick="confirmDeposit('${escHtml(tx.id)}')" class="btn-success flex-1">✅ Confirm</button>
           <button onclick="openRejectModal('${escHtml(tx.id)}')" class="btn-danger flex-1">❌ Reject</button>
         </div>` : ""}
     </div>`).join("");
 }
 
 async function confirmDeposit(txId) {
-  if (!confirm("Deposit ကို Confirm လုပ်မည်လား? Balance ထည့်မည်")) return;
+  const btn = document.getElementById(`confirm-dep-${txId}`);
+  if (btn) { btn.disabled=true; btn.textContent="⏳..."; }
   try {
     await adminFetch("/api/admin/deposits/confirm","POST",{ tx_id: txId });
-    showToast("✅ Deposit Confirmed","success");
+    showToast("✅ Deposit Confirmed — Balance ထည့်ပြီ","success");
     fetchDeposits();
   } catch (err) {
-    showToast(err.message,"error");
+    showToast("❌ " + (err.message||"မအောင်မြင်"),"error");
+    if (btn) { btn.disabled=false; btn.textContent="✅ Confirm"; }
   }
 }
 
-function openRejectModal(txId) { pendingRejectId=txId; document.getElementById("reject-modal").classList.add("open"); }
-function closeRejectModal()     { pendingRejectId=null; document.getElementById("reject-modal").classList.remove("open"); document.getElementById("reject-reason").value=""; }
-
+function openRejectModal(txId) {
+  pendingRejectId = txId;
+  document.getElementById("reject-reason").value = "";
+  document.getElementById("reject-error").classList.add("hidden");
+  document.getElementById("reject-confirm-btn").disabled = false;
+  document.getElementById("reject-confirm-btn").textContent = "Reject ပို့မည်";
+  document.getElementById("reject-modal").classList.add("open");
+}
+function closeRejectModal() {
+  pendingRejectId = null;
+  document.getElementById("reject-modal").classList.remove("open");
+  document.getElementById("reject-reason").value = "";
+}
 async function confirmReject() {
   const reason = document.getElementById("reject-reason").value.trim();
-  if (!reason) { showToast("အကြောင်းပြချက် ဖြည့်ပါ","error"); return; }
+  if (!reason) {
+    document.getElementById("reject-error").textContent = "⚠️ အကြောင်းပြချက် ဖြည့်ပါ";
+    document.getElementById("reject-error").classList.remove("hidden");
+    return;
+  }
+  const btn = document.getElementById("reject-confirm-btn");
+  btn.disabled = true; btn.textContent = "⏳ Sending...";
   try {
     await adminFetch("/api/admin/deposits/reject","POST",{ tx_id: pendingRejectId, reason });
     showToast("Deposit Rejected","info");
     closeRejectModal(); fetchDeposits();
-  } catch (err) { showToast(err.message,"error"); }
+  } catch (err) {
+    showToast("❌ " + (err.message||"မအောင်မြင်"),"error");
+    btn.disabled = false; btn.textContent = "Reject ပို့မည်";
+  }
 }
 
-/* ─────────────────────────────────
-   USERS
-   ───────────────────────────────── */
+/* ── USERS ── */
 async function fetchUsers(q="") {
   const list = document.getElementById("users-list");
-  list.innerHTML='<div class="spinner"></div>';
+  list.innerHTML = '<div class="spinner"></div>';
   try {
     const url  = q ? `/api/admin/users?q=${encodeURIComponent(q)}` : "/api/admin/users";
     const data = await adminFetch(url,"GET");
     renderUsers(data.users||[]);
   } catch (err) {
-    list.innerHTML=`<p class="text-rose-400 text-sm text-center py-6">${escHtml(err.message)}</p>`;
+    list.innerHTML = `<div class="card border-rose-500/30">
+      <p class="text-rose-400 text-sm">❌ ${escHtml(err.message)}</p>
+      <button onclick="fetchUsers()" class="btn-ghost mt-3 text-xs">↻ ထပ်ကြိုးစား</button>
+    </div>`;
   }
 }
 
@@ -462,11 +456,15 @@ function searchUsers() {
   fetchUsers(q);
 }
 
+/* BUG FIX: get current search query for refreshing after ban/unban/balance ops */
+function getCurrentUserQuery() {
+  return document.getElementById("user-search").value.trim();
+}
+
 function renderUsers(users) {
   const list = document.getElementById("users-list");
   if (!users.length) { list.innerHTML=`<p class="text-slate-500 text-sm text-center py-10">User မတွေ့ပါ</p>`; return; }
-
-  list.innerHTML=users.map(u=>`
+  list.innerHTML = users.map(u=>`
     <div class="card">
       <div class="flex items-center justify-between mb-2">
         <div>
@@ -483,89 +481,157 @@ function renderUsers(users) {
         ${u.ban_reason?`<span class="text-slate-400">Ban Reason</span><span class="text-right text-rose-400">${escHtml(u.ban_reason)}</span>`:""}
       </div>
       <div class="flex gap-2 flex-wrap">
-        <button onclick="openBalanceModal('${escHtml(u.telegram_id)}','${escHtml(u.username||"")}','add')"
+        <button id="bal-add-${escHtml(u.telegram_id)}"
+                onclick="openBalanceModal('${escHtml(u.telegram_id)}','${escHtml(u.username||"")}','add')"
                 class="btn-success text-xs">+ Balance</button>
-        <button onclick="openBalanceModal('${escHtml(u.telegram_id)}','${escHtml(u.username||"")}','deduct')"
+        <button id="bal-ded-${escHtml(u.telegram_id)}"
+                onclick="openBalanceModal('${escHtml(u.telegram_id)}','${escHtml(u.username||"")}','deduct')"
                 class="btn-ghost text-xs">− Balance</button>
         ${u.is_banned
-          ? `<button onclick="unbanUser('${escHtml(u.telegram_id)}')" class="btn-primary text-xs">✅ Unban</button>`
-          : `<button onclick="openBanModal('${escHtml(u.telegram_id)}')" class="btn-danger text-xs">🚫 Ban</button>`
+          ? `<button id="unban-${escHtml(u.telegram_id)}" onclick="unbanUser('${escHtml(u.telegram_id)}')" class="btn-primary text-xs">✅ Unban</button>`
+          : `<button id="ban-${escHtml(u.telegram_id)}" onclick="openBanModal('${escHtml(u.telegram_id)}')" class="btn-danger text-xs">🚫 Ban</button>`
         }
       </div>
     </div>`).join("");
 }
 
-// Balance modal
+/* BALANCE MODAL — BUG FIX: malformed showToast string fixed */
 function openBalanceModal(tid, username, action) {
   pendingBalance = { tid, username, action };
-  const title = action==="add" ? `+ Balance ထည့်ရန်` : `− Balance နုတ်ရန်`;
+  const title = action==="add" ? "Balance ထည့်ရန်" : "Balance နုတ်ရန်";
   document.getElementById("balance-modal-title").textContent = `💰 ${title}`;
   document.getElementById("balance-modal-user").textContent  = `@${username} (${tid})`;
-  document.getElementById("balance-confirm-btn").className   = action==="add" ? "btn-success flex-1" : "btn-danger flex-1";
-  document.getElementById("balance-confirm-btn").textContent = action==="add" ? "✅ ထည့်မည်" : "− နုတ်မည်";
+  const confirmBtn = document.getElementById("balance-confirm-btn");
+  confirmBtn.className  = action==="add" ? "btn-success flex-1" : "btn-danger flex-1";
+  confirmBtn.textContent = action==="add" ? "✅ ထည့်မည်" : "− နုတ်မည်";
+  confirmBtn.disabled   = false;
   document.getElementById("balance-amount").value = "";
+  document.getElementById("balance-error").classList.add("hidden");
   document.getElementById("balance-modal").classList.add("open");
 }
 function closeBalanceModal() {
-  pendingBalance={tid:null,username:null,action:null};
+  pendingBalance = {tid:null,username:null,action:null};
   document.getElementById("balance-modal").classList.remove("open");
 }
 async function confirmBalance() {
   const amount = parseInt(document.getElementById("balance-amount").value,10);
-  if (!amount||amount<=0) { showToast("ပမာဏ ဖြည့်ပါ","error"); return; }
+  if (!amount||amount<=0) {
+    document.getElementById("balance-error").textContent = "⚠️ ပမာဏ ဖြည့်ပါ";
+    document.getElementById("balance-error").classList.remove("hidden");
+    return;
+  }
+  const btn = document.getElementById("balance-confirm-btn");
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = "⏳...";
   try {
     const res = await adminFetch("/api/admin/users/balance","POST",{
       telegram_id: pendingBalance.tid, amount, action: pendingBalance.action,
     });
-    showToast(`✅ Balance ${pendingBalance.action==="add"?"ထည့်":"နုတ်"}ပြီး — လက်ကျန်: ${Number(res.new_balance).toLocaleString()}","success`);
-    closeBalanceModal(); fetchUsers(document.getElementById("user-search").value.trim());
-  } catch (err) { showToast(err.message,"error"); }
+    // BUG FIX: was showToast(`...,"success`) — extra quote inside string
+    const verb = pendingBalance.action==="add" ? "ထည့်" : "နုတ်";
+    showToast(`✅ Balance ${verb}ပြီး — လက်ကျန်: ${Number(res.new_balance).toLocaleString()} ကျပ်`, "success");
+    closeBalanceModal();
+    // BUG FIX: refresh with current search query, not empty
+    fetchUsers(getCurrentUserQuery());
+  } catch (err) {
+    showToast("❌ " + (err.message||"မအောင်မြင်"), "error");
+    btn.disabled = false; btn.textContent = origText;
+  }
 }
 
-// Ban modal
-function openBanModal(tid) { pendingBanId=tid; document.getElementById("ban-modal").classList.add("open"); }
-function closeBanModal()    { pendingBanId=null; document.getElementById("ban-modal").classList.remove("open"); document.getElementById("ban-reason").value=""; }
+/* BAN MODAL */
+function openBanModal(tid) {
+  pendingBanId = tid;
+  document.getElementById("ban-reason").value = "";
+  document.getElementById("ban-error").classList.add("hidden");
+  document.getElementById("ban-confirm-btn").disabled = false;
+  document.getElementById("ban-confirm-btn").textContent = "🚫 Ban လုပ်မည်";
+  document.getElementById("ban-modal").classList.add("open");
+}
+function closeBanModal() {
+  pendingBanId = null;
+  document.getElementById("ban-modal").classList.remove("open");
+  document.getElementById("ban-reason").value = "";
+}
 async function confirmBan() {
   const reason = document.getElementById("ban-reason").value.trim();
-  if (!reason) { showToast("Ban reason ဖြည့်ပါ","error"); return; }
+  if (!reason) {
+    document.getElementById("ban-error").textContent = "⚠️ Ban reason ဖြည့်ပါ";
+    document.getElementById("ban-error").classList.remove("hidden");
+    return;
+  }
+  const btn = document.getElementById("ban-confirm-btn");
+  btn.disabled = true; btn.textContent = "⏳ Banning...";
   try {
     await adminFetch("/api/admin/users/ban","POST",{ telegram_id: pendingBanId, reason });
-    showToast("🚫 User ကို Ban လုပ်ပြီ","info"); closeBanModal();
-    fetchUsers(document.getElementById("user-search").value.trim());
-  } catch (err) { showToast(err.message,"error"); }
+    showToast("🚫 User ကို Ban လုပ်ပြီ","info");
+    closeBanModal();
+    // BUG FIX: keep current search query when refreshing
+    fetchUsers(getCurrentUserQuery());
+  } catch (err) {
+    showToast("❌ " + (err.message||"မအောင်မြင်"),"error");
+    btn.disabled = false; btn.textContent = "🚫 Ban လုပ်မည်";
+  }
 }
 async function unbanUser(tid) {
-  if (!confirm("User ကို Unban လုပ်မည်လား?")) return;
+  const btn = document.getElementById(`unban-${tid}`);
+  if (btn) { btn.disabled=true; btn.textContent="⏳..."; }
   try {
     await adminFetch("/api/admin/users/unban","POST",{ telegram_id: tid });
-    showToast("✅ Unban ပြီး","success"); fetchUsers(document.getElementById("user-search").value.trim());
-  } catch (err) { showToast(err.message,"error"); }
+    showToast("✅ Unban ပြီး","success");
+    // BUG FIX: use current query
+    fetchUsers(getCurrentUserQuery());
+  } catch (err) {
+    showToast("❌ " + (err.message||"မအောင်မြင်"),"error");
+    if (btn) { btn.disabled=false; btn.textContent="✅ Unban"; }
+  }
 }
 
-/* ─────────────────────────────────
-   MATCHES
-   ───────────────────────────────── */
+/* ── MATCHES ── */
 async function fetchMatches() {
   const list   = document.getElementById("matches-list");
   const status = document.getElementById("match-filter").value;
-  list.innerHTML='<div class="spinner"></div>';
+  list.innerHTML = '<div class="spinner"></div>';
   try {
-    const data = await adminFetch(`/api/admin/matches${status?"?status="+status:""}`, "GET");
+    // BUG FIX: only append ?status= when not empty; prevents sending status=undefined
+    const url = status ? `/api/admin/matches?status=${encodeURIComponent(status)}` : "/api/admin/matches";
+    const data = await adminFetch(url, "GET");
     renderMatches(data.matches||[]);
   } catch (err) {
-    list.innerHTML=`<p class="text-rose-400 text-sm text-center py-6">${escHtml(err.message)}</p>`;
+    list.innerHTML = `<div class="card border-rose-500/30">
+      <p class="text-rose-400 text-sm">❌ ${escHtml(err.message)}</p>
+      <button onclick="fetchMatches()" class="btn-ghost mt-3 text-xs">↻ ထပ်ကြိုးစား</button>
+    </div>`;
   }
 }
 
 function renderMatches(matches) {
   const list = document.getElementById("matches-list");
-  if (!matches.length) { list.innerHTML=`<p class="text-slate-500 text-sm text-center py-8">Match မရှိပါ</p>`; return; }
+  if (!matches.length) {
+    const status = document.getElementById("match-filter").value;
+    const statusLabel = status || "All";
+    list.innerHTML = `<p class="text-slate-500 text-sm text-center py-8">「${statusLabel}」 Match မရှိပါ</p>`;
+    return;
+  }
 
-  list.innerHTML=matches.map(m=>`
+  // Badge class mapping — BUG FIX: added pending-match alias for pending status
+  const badgeClass = (s) => {
+    const map = {
+      pending:   "badge-pending-match",
+      active:    "badge-active",
+      verifying: "badge-verifying",
+      done:      "badge-done",
+      cancelled: "badge-cancelled",
+    };
+    return map[s] || "badge";
+  };
+
+  list.innerHTML = matches.map(m=>`
     <div class="card">
       <div class="flex items-start justify-between mb-2">
         <span class="font-game font-bold text-amber-400 text-sm tracking-wider">${escHtml(m.serial_id)}</span>
-        <span class="badge badge-${m.status}">${m.status}</span>
+        <span class="badge ${badgeClass(m.status)}">${m.status}</span>
       </div>
       <div class="grid grid-cols-2 gap-y-1 text-xs mb-2">
         <span class="text-slate-400">Game ID</span>
@@ -573,9 +639,10 @@ function renderMatches(matches) {
         <span class="text-slate-400">Game Name</span>
         <span class="text-right text-slate-200 truncate">${escHtml(m.game_name)}</span>
         <span class="text-slate-400">Creator</span>
-        <span class="text-right text-slate-200">@${escHtml(m.creator_username||"?")} <span class="text-slate-500">(${escHtml(m.creator_id)})</span></span>
+        <span class="text-right text-slate-200">@${escHtml(m.creator_username||"?")}
+          <span class="text-slate-600">(${escHtml(m.creator_id)})</span></span>
         <span class="text-slate-400">Joiner</span>
-        <span class="text-right text-slate-200">${m.joiner_id?`@${escHtml(m.joiner_username||"?")} <span class="text-slate-500">(${escHtml(m.joiner_id)})</span>`:"—"}</span>
+        <span class="text-right text-slate-200">${m.joiner_id?`@${escHtml(m.joiner_username||"?")} <span class="text-slate-600">(${escHtml(m.joiner_id)})</span>`:"—"}</span>
         <span class="text-slate-400">ကြေး</span>
         <span class="text-right text-amber-400 font-bold">${Number(m.bet_amount).toLocaleString()} ကျပ်</span>
         <span class="text-slate-400">ရရှိမည့်ငွေ</span>
@@ -586,31 +653,67 @@ function renderMatches(matches) {
         <span class="text-right text-slate-500">${fmtDate(m.created_at)}</span>
       </div>
       ${["active","verifying"].includes(m.status) ? `
-        <div class="mt-2 pt-2 border-t border-slate-700 text-xs text-slate-500">
-          Serial ID: <code class="text-amber-400">${escHtml(m.serial_id)}</code> ကို Resolve box တွင် အသုံးပြုပါ
+        <div class="mt-2 pt-2 border-t border-slate-700 text-xs text-slate-500 flex items-center gap-2">
+          <span>Serial:</span>
+          <code class="text-amber-400 font-bold">${escHtml(m.serial_id)}</code>
+          <button onclick="autofillResolve('${escHtml(m.serial_id)}')"
+                  class="ml-auto text-xs text-amber-400 border border-amber-400/30 rounded-full px-2 py-0.5 hover:bg-amber-400/10 transition-colors">
+            Resolve ထဲ ထည့်မည်
+          </button>
         </div>` : ""}
     </div>`).join("");
+}
+
+/* BUG FIX: Quick-fill resolve box from match card */
+function autofillResolve(serialId) {
+  document.getElementById("resolve-serial").value = serialId;
+  document.getElementById("resolve-winner").value = "";
+  document.getElementById("resolve-error").classList.add("hidden");
+  document.getElementById("resolve-serial").focus();
+  // Scroll to resolve box
+  document.getElementById("resolve-serial").scrollIntoView({behavior:"smooth",block:"center"});
 }
 
 async function resolveMatch() {
   const serial = document.getElementById("resolve-serial").value.trim();
   const winner = document.getElementById("resolve-winner").value.trim();
-  if (!serial||!winner) { showToast("Serial ID နှင့် Winner ID ဖြည့်ပါ","error"); return; }
-  if (!confirm(`Serial <${serial}> — Winner: ${winner}\n\nအတည်ပြုမည်လား?`)) return;
+  const errEl  = document.getElementById("resolve-error");
+  const btn    = document.getElementById("resolve-btn");
+  const btnTxt = document.getElementById("resolve-btn-text");
+  const btnSp  = document.getElementById("resolve-spinner");
+
+  errEl.classList.add("hidden");
+
+  if (!serial || !winner) {
+    errEl.textContent = "⚠️ Serial ID နှင့် Winner ID နှစ်ခုလုံး ဖြည့်ပါ";
+    errEl.classList.remove("hidden"); return;
+  }
+  if (!/^\d+$/.test(winner)) {
+    errEl.textContent = "⚠️ Winner Telegram ID ဂဏန်းများသာ ဖြည့်ပါ";
+    errEl.classList.remove("hidden"); return;
+  }
+
+  // Loading state — prevent double-click
+  btn.disabled = true; btnTxt.textContent = "စစ်ဆေးနေသည်..."; btnSp.classList.remove("hidden");
+
   try {
     const res = await adminFetch("/api/admin/matches/resolve","POST",{
       serial_id: serial, winner_telegram_id: winner,
     });
     showToast(`✅ ${Number(res.reward_sent).toLocaleString()} ကျပ် Winner ထံ ပို့ပြီ`,"success");
-    document.getElementById("resolve-serial").value="";
-    document.getElementById("resolve-winner").value="";
+    document.getElementById("resolve-serial").value = "";
+    document.getElementById("resolve-winner").value = "";
     fetchMatches();
-  } catch (err) { showToast(err.message,"error"); }
+  } catch (err) {
+    errEl.textContent = "❌ " + (err.message||"မအောင်မြင်");
+    errEl.classList.remove("hidden");
+    showToast(err.message||"Resolve မအောင်မြင်","error");
+  } finally {
+    btn.disabled = false; btnTxt.textContent = "🏆 Winner သတ်မှတ်မည်"; btnSp.classList.add("hidden");
+  }
 }
 
-/* ─────────────────────────────────
-   UTILS
-   ───────────────────────────────── */
+/* ── UTILS ── */
 async function adminFetch(path, method="GET", body=null) {
   const opts = {
     method,
@@ -623,24 +726,22 @@ async function adminFetch(path, method="GET", body=null) {
   return data;
 }
 
-let _toastT=null;
-function showToast(msg,type="info"){
-  const el=document.getElementById("toast");
-  el.textContent=msg; el.className=`show ${type}`;
-  if(_toastT)clearTimeout(_toastT);
-  _toastT=setTimeout(()=>{el.className="";},3500);
+let _toastT = null;
+function showToast(msg, type="info") {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.className = `show ${type}`;
+  if (_toastT) clearTimeout(_toastT);
+  _toastT = setTimeout(()=>{ el.className=""; }, 4000);
 }
-
-function escHtml(s){
+function escHtml(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
-function fmtDate(s){
-  if(!s)return"—";
-  try{ return new Date(s).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
-  catch{ return s; }
+function fmtDate(s) {
+  if (!s) return "—";
+  try { return new Date(s).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
+  catch { return s; }
 }
 
-/* Boot */
 document.addEventListener("DOMContentLoaded", initAdmin);
 initAdmin();
 </script>

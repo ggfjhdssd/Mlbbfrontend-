@@ -1,51 +1,25 @@
 <!DOCTYPE html>
 <!--
-  MLBB Matchmaking & Betting — index.html  (v3)
-  ─────────────────────────────────────────────
-  NEW in v3:
-    • Deposit modal (KBZ Pay / Wave Pay tabs)
-    • schedule_time field on Match tab
-    • Schedule + creator @username link on Home cards
-    • Upload tab → redirects user to bot
-    • Banned-user guard on register
-  ─────────────────────────────────────────────
-  SECTIONS:
-    1. HEAD         — meta, CDN, Tailwind config
-    2. STYLES       — custom CSS
-    3. HTML BODY    — header, tabs, nav
-       3a. Header
-       3b. Tab: Home
-       3c. Tab: Match (create)
-       3d. Tab: History
-       3e. Tab: Upload
-       3f. Deposit Modal
-       3g. Bottom Nav
-    4. JAVASCRIPT
-       A. Config & State
-       B. Init (Telegram WebApp + register)
-       C. Navigation
-       D. Home Tab   (fetchMatches, renderMatches, play, hide)
-       E. Match Tab  (serial, bet chips, reward, createMatch)
-       F. History Tab
-       G. Deposit Modal
-       H. Utilities  (apiFetch, toast, formatAmount, escHtml)
+  MLBB Matchmaking & Betting — index.html  (v4)
+  Changes:
+    • Join Match Modal (Glassmorphism) replaces confirm()
+    • Navigation moved to TOP (below header)
+    • Game ID numeric-only validation
+    • Double-click protection (disabled/loading state)
+    • Human-readable API error messages
+    • Backend already sends Telegram notification to Player 1 on join
 -->
 <html lang="my">
 <head>
-  <!-- ══════════════════════════════════════
-       SECTION 1 · HEAD
-       ══════════════════════════════════════ -->
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
   <meta name="theme-color" content="#0f172a"/>
   <title>MLBB Matchmaking</title>
-
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet"/>
-
   <script>
     tailwind.config = {
       theme: {
@@ -62,10 +36,6 @@
       },
     };
   </script>
-
-  <!-- ══════════════════════════════════════
-       SECTION 2 · STYLES
-       ══════════════════════════════════════ -->
   <style>
     *,*::before,*::after{box-sizing:border-box}
     html,body{
@@ -79,26 +49,28 @@
       height:100dvh;max-width:480px;margin:0 auto;
       position:relative;overflow:hidden;
     }
-    /* Tab panels */
-    .tab-panel{display:none;flex:1;overflow-y:auto;overflow-x:hidden;
-               padding:12px 16px 80px;-webkit-overflow-scrolling:touch;}
-    .tab-panel.active{display:block;}
-    /* Bottom nav */
-    #bottom-nav{
-      position:fixed;bottom:0;left:50%;transform:translateX(-50%);
-      width:100%;max-width:480px;
-      background:#1e293b;border-top:1px solid #334155;
-      display:flex;z-index:50;
+    /* TOP NAV */
+    #top-nav{
+      display:flex;background:#1e293b;
+      border-bottom:2px solid #334155;
+      flex-shrink:0;overflow-x:auto;scrollbar-width:none;
     }
+    #top-nav::-webkit-scrollbar{display:none;}
     .nav-btn{
       flex:1;display:flex;flex-direction:column;
       align-items:center;justify-content:center;
-      padding:8px 4px;cursor:pointer;font-size:10px;
+      padding:8px 4px 6px;cursor:pointer;font-size:10px;
       color:#64748b;transition:color .2s;
       border:none;background:transparent;gap:3px;
+      border-bottom:2px solid transparent;
+      margin-bottom:-2px;white-space:nowrap;
     }
-    .nav-btn.active{color:#f59e0b;}
-    .nav-btn svg{width:22px;height:22px;}
+    .nav-btn.active{color:#f59e0b;border-bottom-color:#f59e0b;}
+    .nav-btn svg{width:20px;height:20px;}
+    /* Tab panels */
+    .tab-panel{display:none;flex:1;overflow-y:auto;overflow-x:hidden;
+               padding:12px 16px 24px;-webkit-overflow-scrolling:touch;}
+    .tab-panel.active{display:block;}
     /* Cards */
     .match-card{
       background:#1e293b;border:1px solid #334155;
@@ -137,6 +109,7 @@
     .field:focus{border-color:#f59e0b;}
     .field:disabled{opacity:.5;cursor:not-allowed;}
     .field[readonly]{opacity:.7;background:#1e293b;}
+    .field.is-error{border-color:#ef4444;}
     /* Bet chips */
     .bet-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
     .bet-chip{
@@ -154,7 +127,7 @@
     .fade-in{animation:fadeIn .4s ease forwards;}
     @keyframes modalIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
     .modal-in{animation:modalIn .25s ease forwards;}
-    /* Modal overlay */
+    /* Deposit Modal */
     #deposit-modal{
       position:fixed;inset:0;z-index:500;
       background:rgba(0,0,0,.7);backdrop-filter:blur(4px);
@@ -166,7 +139,24 @@
       border-radius:20px 20px 0 0;padding:20px 20px 40px;
       max-height:92dvh;overflow-y:auto;
     }
-    /* Modal tabs */
+    /* JOIN MODAL — Glassmorphism */
+    #join-modal{
+      position:fixed;inset:0;z-index:600;
+      background:rgba(0,0,0,.78);backdrop-filter:blur(10px);
+      display:none;align-items:center;justify-content:center;
+      padding:20px;
+    }
+    #join-modal.open{display:flex;}
+    .join-sheet{
+      width:100%;max-width:420px;
+      background:rgba(15,23,42,0.93);
+      border:1px solid rgba(245,158,11,0.28);
+      border-radius:20px;padding:22px;
+      max-height:90dvh;overflow-y:auto;
+      box-shadow:0 0 48px rgba(245,158,11,0.12),0 24px 64px rgba(0,0,0,.55);
+      backdrop-filter:blur(24px);
+    }
+    /* Modal pay tabs */
     .pay-tab-btn{
       flex:1;padding:9px;border-radius:8px;font-size:13px;font-weight:700;
       font-family:"Rajdhani",sans-serif;cursor:pointer;transition:all .15s;
@@ -178,6 +168,11 @@
       display:inline-block;padding:1px 8px;border-radius:999px;
       font-size:10px;font-weight:700;font-family:"Rajdhani",sans-serif;
     }
+    .error-box{
+      background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,.3);
+      border-radius:8px;padding:10px 14px;
+      color:#f87171;font-size:12px;line-height:1.6;
+    }
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-track{background:transparent;}
     ::-webkit-scrollbar-thumb{background:#334155;border-radius:4px;}
@@ -185,27 +180,16 @@
 </head>
 <body>
 
-<!-- ══════════════════════════════════════════════
-     SECTION 3 · HTML BODY
-     ══════════════════════════════════════════════ -->
-
 <div id="toast"></div>
 
 <div id="app">
 
-  <!-- ════════════════════════════════
-       3a. HEADER
-       ════════════════════════════════ -->
-  <header id="header"
-          class="flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-900 shrink-0">
-
-    <!-- Left: avatar + name + balance -->
+  <!-- HEADER -->
+  <header class="flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-900 shrink-0">
     <div class="flex items-center gap-3">
       <div id="avatar"
            class="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-600
-                  flex items-center justify-center text-slate-900 font-bold text-base shrink-0">
-        ?
-      </div>
+                  flex items-center justify-center text-slate-900 font-bold text-base shrink-0">?</div>
       <div class="flex flex-col leading-tight">
         <span id="display-username" class="text-sm font-semibold text-slate-100 font-game">@---</span>
         <span class="text-xs text-slate-400">
@@ -213,8 +197,6 @@
         </span>
       </div>
     </div>
-
-    <!-- Right: OMMK / AddFunds / Withdrawal -->
     <div class="flex flex-col items-end gap-0.5">
       <span class="text-xs font-bold text-amber-400 font-game tracking-wider">OMMK</span>
       <button onclick="openDepositModal()"
@@ -228,217 +210,8 @@
     </div>
   </header>
 
-  <!-- ════════════════════════════════
-       3b. TAB: HOME — Lobby
-       ════════════════════════════════ -->
-  <div id="tab-home" class="tab-panel active">
-    <div class="flex items-center justify-between mb-3 pt-1">
-      <h2 class="text-base font-bold text-slate-100 font-game tracking-wide">🏟 Match Lobby</h2>
-      <button onclick="fetchMatches()"
-              class="text-xs text-amber-400 border border-amber-400/40 rounded-full px-3 py-1 hover:bg-amber-400/10 transition-colors">
-        ↻ Refresh
-      </button>
-    </div>
-    <div id="matches-container"><div class="spinner"></div></div>
-  </div>
-
-  <!-- ════════════════════════════════
-       3c. TAB: MATCH — Create Match
-       ════════════════════════════════ -->
-  <div id="tab-match" class="tab-panel">
-
-    <!-- Serial ID -->
-    <div class="flex items-center justify-between bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 mb-4 mt-1">
-      <span class="text-xs text-slate-400">အမှတ်စဉ်</span>
-      <span id="serial-display" class="font-game font-bold text-amber-400 text-lg tracking-widest">········</span>
-      <button onclick="refreshSerial()"
-              class="text-xs text-slate-400 hover:text-amber-400 transition-colors border border-slate-600 rounded-full px-2 py-0.5">
-        ↻
-      </button>
-    </div>
-
-    <div class="flex flex-col gap-4">
-
-      <!-- Game ID (numbers only) -->
-      <div>
-        <label class="block text-xs text-slate-400 mb-1.5">Game ID ဖြည့်ရန် <span class="text-rose-400">*</span></label>
-        <input id="game-id" type="text" inputmode="numeric" pattern="[0-9]*"
-               placeholder="e.g. 123456789" class="field"
-               oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
-      </div>
-
-      <!-- Game Name -->
-      <div>
-        <label class="block text-xs text-slate-400 mb-1.5">Game နာမည်ဖြည့်ရန် <span class="text-rose-400">*</span></label>
-        <input id="game-name" type="text" placeholder="e.g. NightOwl / ညဘုတ်"
-               class="field" maxlength="60"/>
-      </div>
-
-      <!-- Schedule Date & Time (NEW) -->
-      <div>
-        <label class="block text-xs text-slate-400 mb-1.5">ဆော့မည့် အချိန်နှင့် ရက်စွဲ</label>
-        <input id="schedule-time" type="datetime-local"
-               class="field"
-               style="color-scheme:dark;"/>
-      </div>
-
-      <!-- Bet Amount chips -->
-      <div>
-        <label class="block text-xs text-slate-400 mb-2">ပိုက်ဆံသတ်မှတ်ရန် <span class="text-rose-400">*</span></label>
-        <div class="bet-grid mb-2" id="bet-chips">
-          <div class="bet-chip" data-amount="5000"  onclick="selectBet(5000)">5,000</div>
-          <div class="bet-chip" data-amount="10000" onclick="selectBet(10000)">10,000</div>
-          <div class="bet-chip" data-amount="15000" onclick="selectBet(15000)">15,000</div>
-          <div class="bet-chip" data-amount="30000" onclick="selectBet(30000)">30,000</div>
-          <div class="bet-chip" data-amount="50000" onclick="selectBet(50000)">50,000</div>
-          <div class="bet-chip" data-amount="custom" onclick="selectBet('custom')">Custom</div>
-        </div>
-        <div id="custom-bet-wrap" class="hidden">
-          <input id="custom-bet-amount" type="text" inputmode="numeric" pattern="[0-9]*"
-                 placeholder="ကိုယ်ပိုင်ပမာဏ ရိုက်ထည့်ပါ"
-                 class="field mt-1" oninput="onCustomBetInput()"/>
-        </div>
-      </div>
-
-      <!-- Reward (read-only) -->
-      <div>
-        <label class="block text-xs text-slate-400 mb-1.5">ရရှိမည့်ငွေ (90% of pool)</label>
-        <input id="reward-display" type="text" class="field text-emerald-400 font-bold"
-               readonly placeholder="— ကျပ်"/>
-      </div>
-
-      <p id="bet-error" class="text-rose-400 text-xs hidden"></p>
-
-      <button id="create-match-btn" onclick="createMatch()"
-              class="w-full py-3 rounded-xl font-bold text-base font-game tracking-wide
-                     bg-amber-500 hover:bg-amber-400 active:scale-[.98]
-                     text-slate-900 transition-all shadow-lg shadow-amber-500/20
-                     disabled:opacity-40 disabled:cursor-not-allowed">
-        ⚔️ match
-      </button>
-    </div>
-  </div>
-
-  <!-- ════════════════════════════════
-       3d. TAB: HISTORY
-       ════════════════════════════════ -->
-  <div id="tab-history" class="tab-panel">
-    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📋 Match History</h2>
-    <div id="history-container"><div class="spinner"></div></div>
-  </div>
-
-  <!-- ════════════════════════════════
-       3e. TAB: UPLOAD — redirect to bot
-       ════════════════════════════════ -->
-  <div id="tab-upload" class="tab-panel">
-    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📤 Result Upload</h2>
-
-    <div class="bg-slate-800 border border-amber-500/30 rounded-xl p-5 text-center mt-4">
-      <div class="text-4xl mb-3">🤖</div>
-      <p class="text-amber-400 font-bold text-sm mb-2">Telegram Bot မှတဆင့် တင်ပါ</p>
-      <p class="text-slate-400 text-xs leading-relaxed mb-5">
-        Result ကို Mini App တွင် တင်၍မရပါ။<br/>
-        Telegram Bot ထဲ ပြန်သွားပြီး<br/>
-        <span class="text-amber-400 font-semibold">/upload</span> command နှိပ်ပြီး<br/>
-        Screenshot + Video + Serial ID ပေးပို့ပါ။
-      </p>
-      <button onclick="goToBot()"
-              class="w-full py-3 rounded-xl font-bold text-sm font-game
-                     bg-blue-600 hover:bg-blue-500 text-white transition-colors
-                     active:scale-[.98] shadow-lg shadow-blue-600/20">
-        🤖 Bot သို့သွားရန်
-      </button>
-    </div>
-
-    <!-- Steps guide -->
-    <div class="mt-4 bg-slate-800 border border-slate-700 rounded-xl p-4">
-      <p class="text-xs font-bold text-slate-300 mb-3 font-game">📋 Upload Steps</p>
-      <div class="flex flex-col gap-2">
-        <div class="flex items-start gap-2 text-xs text-slate-400">
-          <span class="text-amber-400 font-bold shrink-0">①</span>
-          <span>Bot ထဲ <code class="text-amber-400">/upload</code> ရိုက်ပါ</span>
-        </div>
-        <div class="flex items-start gap-2 text-xs text-slate-400">
-          <span class="text-amber-400 font-bold shrink-0">②</span>
-          <span>ပွဲပြီးဆုံးကြောင်း Screenshot ပေးပို့ပါ</span>
-        </div>
-        <div class="flex items-start gap-2 text-xs text-slate-400">
-          <span class="text-amber-400 font-bold shrink-0">③</span>
-          <span>Profile → History (၁၀)စက္ကန့် Screen Record Video ပေးပို့ပါ</span>
-        </div>
-        <div class="flex items-start gap-2 text-xs text-slate-400">
-          <span class="text-amber-400 font-bold shrink-0">④</span>
-          <span>Match Serial ID ရိုက်ထည့်ပါ</span>
-        </div>
-        <div class="flex items-start gap-2 text-xs text-slate-400">
-          <span class="text-amber-400 font-bold shrink-0">⑤</span>
-          <span>Admin စစ်ဆေးပြီး ငွေထုတ်ပေးမည်</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ════════════════════════════════
-       3f. DEPOSIT MODAL
-       ════════════════════════════════ -->
-  <div id="deposit-modal" onclick="onModalBackdropClick(event)">
-    <div class="sheet modal-in">
-
-      <!-- Handle bar -->
-      <div class="w-10 h-1 bg-slate-600 rounded-full mx-auto mb-5"></div>
-
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-base font-bold text-slate-100 font-game">💳 Deposit (AddFunds)</h3>
-        <button onclick="closeDepositModal()"
-                class="text-slate-400 hover:text-slate-200 text-xl leading-none bg-transparent border-none cursor-pointer">
-          ✕
-        </button>
-      </div>
-
-      <!-- Payment method tabs -->
-      <div class="flex gap-2 mb-5">
-        <button id="tab-kbz-btn" class="pay-tab-btn active" onclick="switchPayTab('kbz')">KBZ Pay</button>
-        <button id="tab-wave-btn" class="pay-tab-btn" onclick="switchPayTab('wave')">Wave Pay</button>
-      </div>
-
-      <!-- KBZ Tab -->
-      <div id="pay-kbz" class="pay-content">
-        <div class="bg-slate-800 border border-slate-700 rounded-xl p-3 mb-4 text-xs">
-          <div class="flex justify-between mb-1">
-            <span class="text-slate-400">ငွေလက်ခံသူ နံပါတ်</span>
-            <span class="text-amber-400 font-bold font-game">09792310926</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-slate-400">ငွေလက်ခံသူ အမည်</span>
-            <span class="text-slate-100 font-semibold">Daw Mi Thaung</span>
-          </div>
-        </div>
-        <!-- form fields injected by JS via buildDepositForm('kbz') -->
-        <div id="kbz-form-fields"></div>
-      </div>
-
-      <!-- Wave Tab -->
-      <div id="pay-wave" class="pay-content hidden">
-        <div class="bg-slate-800 border border-slate-700 rounded-xl p-3 mb-4 text-xs">
-          <div class="flex justify-between mb-1">
-            <span class="text-slate-400">ငွေလက်ခံသူ နံပါတ်</span>
-            <span class="text-amber-400 font-bold font-game">09792310926</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-slate-400">ငွေလက်ခံသူ အမည်</span>
-            <span class="text-slate-100 font-semibold">Min Oak Soe</span>
-          </div>
-        </div>
-        <div id="wave-form-fields"></div>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- ════════════════════════════════
-       3g. BOTTOM NAV
-       ════════════════════════════════ -->
-  <nav id="bottom-nav">
+  <!-- TOP NAV -->
+  <nav id="top-nav">
     <button class="nav-btn active" id="nav-home" onclick="switchTab('home')">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955a1.5 1.5 0 012.092 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75"/>
@@ -465,137 +238,324 @@
     </button>
   </nav>
 
+  <!-- TAB: HOME -->
+  <div id="tab-home" class="tab-panel active">
+    <div class="flex items-center justify-between mb-3 pt-1">
+      <h2 class="text-base font-bold text-slate-100 font-game tracking-wide">🏟 Match Lobby</h2>
+      <button onclick="fetchMatches()"
+              class="text-xs text-amber-400 border border-amber-400/40 rounded-full px-3 py-1 hover:bg-amber-400/10 transition-colors">
+        ↻ Refresh
+      </button>
+    </div>
+    <div id="matches-container"><div class="spinner"></div></div>
+  </div>
+
+  <!-- TAB: MATCH -->
+  <div id="tab-match" class="tab-panel">
+    <div class="flex items-center justify-between bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 mb-4 mt-1">
+      <span class="text-xs text-slate-400">အမှတ်စဉ်</span>
+      <span id="serial-display" class="font-game font-bold text-amber-400 text-lg tracking-widest">········</span>
+      <button onclick="refreshSerial()"
+              class="text-xs text-slate-400 hover:text-amber-400 transition-colors border border-slate-600 rounded-full px-2 py-0.5">↻</button>
+    </div>
+    <div class="flex flex-col gap-4">
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">Game ID ဖြည့်ရန် <span class="text-rose-400">*</span></label>
+        <input id="game-id" type="text" inputmode="numeric" pattern="[0-9]*"
+               placeholder="ဂဏန်းများသာ e.g. 123456789" class="field"
+               oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
+        <p class="text-xs text-slate-500 mt-1">ဂဏန်းသက်သက်သာ ဖြည့်ပါ</p>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">Game နာမည်ဖြည့်ရန် <span class="text-rose-400">*</span></label>
+        <input id="game-name" type="text" placeholder="e.g. NightOwl / ညဘုတ်" class="field" maxlength="60"/>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">ဆော့မည့် အချိန်နှင့် ရက်စွဲ</label>
+        <input id="schedule-time" type="datetime-local" class="field" style="color-scheme:dark;"/>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-2">ပိုက်ဆံသတ်မှတ်ရန် <span class="text-rose-400">*</span></label>
+        <div class="bet-grid mb-2" id="bet-chips">
+          <div class="bet-chip" data-amount="5000"  onclick="selectBet(5000)">5,000</div>
+          <div class="bet-chip" data-amount="10000" onclick="selectBet(10000)">10,000</div>
+          <div class="bet-chip" data-amount="15000" onclick="selectBet(15000)">15,000</div>
+          <div class="bet-chip" data-amount="30000" onclick="selectBet(30000)">30,000</div>
+          <div class="bet-chip" data-amount="50000" onclick="selectBet(50000)">50,000</div>
+          <div class="bet-chip" data-amount="custom" onclick="selectBet('custom')">Custom</div>
+        </div>
+        <div id="custom-bet-wrap" class="hidden">
+          <input id="custom-bet-amount" type="text" inputmode="numeric" pattern="[0-9]*"
+                 placeholder="ကိုယ်ပိုင်ပမာဏ ရိုက်ထည့်ပါ" class="field mt-1"
+                 oninput="this.value=this.value.replace(/[^0-9]/g,'');onCustomBetInput()"/>
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1.5">ရရှိမည့်ငွေ (90% of pool)</label>
+        <input id="reward-display" type="text" class="field text-emerald-400 font-bold" readonly placeholder="— ကျပ်"/>
+      </div>
+      <p id="bet-error" class="text-rose-400 text-xs hidden"></p>
+      <button id="create-match-btn" onclick="createMatch()"
+              class="w-full py-3 rounded-xl font-bold text-base font-game tracking-wide
+                     bg-amber-500 hover:bg-amber-400 active:scale-[.98] text-slate-900
+                     transition-all shadow-lg shadow-amber-500/20
+                     disabled:opacity-40 disabled:cursor-not-allowed">
+        ⚔️ Match ဖန်တီးမည်
+      </button>
+    </div>
+  </div>
+
+  <!-- TAB: HISTORY -->
+  <div id="tab-history" class="tab-panel">
+    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📋 Match History</h2>
+    <div id="history-container"><div class="spinner"></div></div>
+  </div>
+
+  <!-- TAB: UPLOAD -->
+  <div id="tab-upload" class="tab-panel">
+    <h2 class="text-base font-bold text-slate-100 font-game tracking-wide mb-3 pt-1">📤 Result Upload</h2>
+    <div class="bg-slate-800 border border-amber-500/30 rounded-xl p-5 text-center mt-4">
+      <div class="text-4xl mb-3">🤖</div>
+      <p class="text-amber-400 font-bold text-sm mb-2">Telegram Bot မှတဆင့် တင်ပါ</p>
+      <p class="text-slate-400 text-xs leading-relaxed mb-5">
+        Result ကို Mini App တွင် တင်၍မရပါ။<br/>
+        Telegram Bot ထဲ ပြန်သွားပြီး<br/>
+        <span class="text-amber-400 font-semibold">/upload</span> command နှိပ်ပြီး<br/>
+        Screenshot + Video + Serial ID ပေးပို့ပါ။
+      </p>
+      <button onclick="goToBot()"
+              class="w-full py-3 rounded-xl font-bold text-sm font-game
+                     bg-blue-600 hover:bg-blue-500 text-white transition-colors active:scale-[.98]">
+        🤖 Bot သို့သွားရန်
+      </button>
+    </div>
+    <div class="mt-4 bg-slate-800 border border-slate-700 rounded-xl p-4">
+      <p class="text-xs font-bold text-slate-300 mb-3 font-game">📋 Upload Steps</p>
+      <div class="flex flex-col gap-2">
+        <div class="flex items-start gap-2 text-xs text-slate-400"><span class="text-amber-400 font-bold shrink-0">①</span><span>Bot ထဲ <code class="text-amber-400">/upload</code> ရိုက်ပါ</span></div>
+        <div class="flex items-start gap-2 text-xs text-slate-400"><span class="text-amber-400 font-bold shrink-0">②</span><span>ပွဲပြီးဆုံးကြောင်း Screenshot ပေးပို့ပါ</span></div>
+        <div class="flex items-start gap-2 text-xs text-slate-400"><span class="text-amber-400 font-bold shrink-0">③</span><span>Profile → History (၁၀)စက္ကန့် Screen Record Video ပေးပို့ပါ</span></div>
+        <div class="flex items-start gap-2 text-xs text-slate-400"><span class="text-amber-400 font-bold shrink-0">④</span><span>Match Serial ID ရိုက်ထည့်ပါ</span></div>
+        <div class="flex items-start gap-2 text-xs text-slate-400"><span class="text-amber-400 font-bold shrink-0">⑤</span><span>Admin စစ်ဆေးပြီး ငွေထုတ်ပေးမည်</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DEPOSIT MODAL -->
+  <div id="deposit-modal" onclick="onModalBackdropClick(event)">
+    <div class="sheet modal-in">
+      <div class="w-10 h-1 bg-slate-600 rounded-full mx-auto mb-5"></div>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-bold text-slate-100 font-game">💳 Deposit (AddFunds)</h3>
+        <button onclick="closeDepositModal()" class="text-slate-400 hover:text-slate-200 text-xl bg-transparent border-none cursor-pointer">✕</button>
+      </div>
+      <div class="flex gap-2 mb-5">
+        <button id="tab-kbz-btn" class="pay-tab-btn active" onclick="switchPayTab('kbz')">KBZ Pay</button>
+        <button id="tab-wave-btn" class="pay-tab-btn" onclick="switchPayTab('wave')">Wave Pay</button>
+      </div>
+      <div id="pay-kbz" class="pay-content">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl p-3 mb-4 text-xs">
+          <div class="flex justify-between mb-1"><span class="text-slate-400">ငွေလက်ခံသူ နံပါတ်</span><span class="text-amber-400 font-bold font-game">09792310926</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">ငွေလက်ခံသူ အမည်</span><span class="text-slate-100 font-semibold">Daw Mi Thaung</span></div>
+        </div>
+        <div id="kbz-form-fields"></div>
+      </div>
+      <div id="pay-wave" class="pay-content hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl p-3 mb-4 text-xs">
+          <div class="flex justify-between mb-1"><span class="text-slate-400">ငွေလက်ခံသူ နံပါတ်</span><span class="text-amber-400 font-bold font-game">09792310926</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">ငွေလက်ခံသူ အမည်</span><span class="text-slate-100 font-semibold">Min Oak Soe</span></div>
+        </div>
+        <div id="wave-form-fields"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JOIN MATCH MODAL (Glassmorphism) -->
+  <div id="join-modal" onclick="onJoinBackdropClick(event)">
+    <div class="join-sheet modal-in">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-5">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm"
+               style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.35);">⚔️</div>
+          <h3 class="text-base font-bold text-slate-100 font-game">Match ဝင်မည်</h3>
+        </div>
+        <button onclick="closeJoinModal()"
+                class="text-slate-400 hover:text-slate-200 text-lg bg-transparent border-none cursor-pointer leading-none px-1">✕</button>
+      </div>
+
+      <!-- Match info -->
+      <div class="rounded-xl p-4 mb-4"
+           style="background:rgba(30,41,59,0.6);border:1px solid rgba(51,65,85,0.6);">
+        <p class="text-xs font-game font-bold tracking-widest text-slate-500 uppercase mb-3">Match Information</p>
+        <div class="grid grid-cols-2 gap-y-2.5">
+          <span class="text-xs text-slate-400">Serial ID</span>
+          <span id="jm-serial" class="text-xs text-amber-400 font-game font-bold text-right tracking-wider">—</span>
+          <span class="text-xs text-slate-400">ကြေးပမာဏ</span>
+          <span id="jm-bet" class="text-xs font-bold text-right" style="color:#f87171;">— ကျပ်</span>
+          <span class="text-xs text-slate-400">နိုင်ရင် ရမည့်ငွေ</span>
+          <span id="jm-reward" class="text-xs font-bold text-right text-emerald-400">— ကျပ်</span>
+          <span class="text-xs text-slate-400">Creator</span>
+          <span id="jm-creator" class="text-xs text-right text-blue-400">—</span>
+        </div>
+      </div>
+
+      <!-- Balance warning -->
+      <div id="jm-balance-warn" class="hidden error-box mb-4">
+        ⚠️ Balance နည်းနေသည် — <span id="jm-balance-warn-text"></span>
+      </div>
+
+      <!-- Divider -->
+      <div class="flex items-center gap-3 mb-4">
+        <div class="flex-1 h-px bg-slate-700/60"></div>
+        <p class="text-xs font-bold text-slate-400 font-game shrink-0">သင်၏ အချက်အလက်</p>
+        <div class="flex-1 h-px bg-slate-700/60"></div>
+      </div>
+
+      <!-- Joiner inputs -->
+      <div class="flex flex-col gap-3 mb-4">
+        <div>
+          <label class="block text-xs text-slate-400 mb-1.5">
+            သင်၏ Game ID <span class="text-rose-400">*</span>
+            <span class="text-slate-500 ml-1">(ဂဏန်းသက်သက်)</span>
+          </label>
+          <input id="jm-game-id" type="text" inputmode="numeric" pattern="[0-9]*"
+                 placeholder="e.g. 987654321"
+                 class="field"
+                 oninput="this.value=this.value.replace(/[^0-9]/g,'');jmClearError()"/>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1.5">
+            သင်၏ Game Name <span class="text-rose-400">*</span>
+          </label>
+          <input id="jm-game-name" type="text"
+                 placeholder="e.g. Shadow / ရိပ်မိုက်"
+                 class="field" maxlength="60"
+                 oninput="jmClearError()"/>
+        </div>
+      </div>
+
+      <!-- API Error -->
+      <div id="jm-error" class="hidden error-box mb-4"></div>
+
+      <!-- Join button -->
+      <button id="jm-confirm-btn" onclick="confirmJoin()"
+              class="w-full py-3.5 rounded-xl font-bold text-base font-game tracking-wide
+                     bg-amber-500 hover:bg-amber-400 active:scale-[.98] text-slate-900
+                     transition-all shadow-lg disabled:opacity-40 disabled:cursor-not-allowed
+                     flex items-center justify-center gap-2">
+        <span id="jm-btn-text">⚔️ Match ဝင်မည်</span>
+        <div id="jm-spinner" class="hidden"
+             style="width:16px;height:16px;border:2px solid rgba(0,0,0,.25);
+                    border-top-color:#0f172a;border-radius:50%;
+                    animation:spin .7s linear infinite;"></div>
+      </button>
+
+      <p class="text-center text-xs text-slate-600 mt-3">
+        ✅ Join ပြီးပါက Player 1 ထံ Telegram Noti ပေးပို့မည်
+      </p>
+    </div>
+  </div>
+
 </div><!-- /app -->
 
-<!-- ══════════════════════════════════════════════
-     SECTION 4 · JAVASCRIPT
-     ══════════════════════════════════════════════ -->
 <script>
 "use strict";
 
-/* ─────────────────────────────────────────────
-   A. CONFIG & STATE
-   ───────────────────────────────────────────── */
-const BACKEND_URL = "https://mlbbbackend.onrender.com"; // ← your Render URL
+/* ── CONFIG & STATE ── */
+const BACKEND_URL = "https://mlbbbackend.onrender.com";
 
 const STATE = {
-  telegramId:     null,
-  username:       null,
-  balance:        0,
-  currentTab:     "home",
-  selectedBet:    null,
-  serialId:       null,
-  hiddenMatchIds: new Set(),
-  activePayTab:   "kbz",  // deposit modal active tab
+  telegramId: null, username: null, balance: 0,
+  currentTab: "home", selectedBet: null, serialId: null,
+  hiddenMatchIds: new Set(), activePayTab: "kbz",
+  joinTarget: null,  // { matchId, betAmount, rewardAmount, serialId, creatorUsername }
+  joinBusy: false,
 };
 
-/* ─────────────────────────────────────────────
-   B. INIT — Telegram WebApp + register user
-   ───────────────────────────────────────────── */
+/* ── INIT ── */
 async function initApp() {
   const tg   = window.Telegram?.WebApp;
   const user = tg?.initDataUnsafe?.user;
-
   if (user) {
     STATE.telegramId = String(user.id);
     STATE.username   = user.username || user.first_name || "Player";
-    tg.ready();
-    tg.expand();
+    tg.ready(); tg.expand();
   } else {
     STATE.telegramId = "preview_user";
     STATE.username   = "PreviewUser";
-    showToast("⚠️ Telegram ထဲမှ ဖွင့်ပါ", "info");
+    showToast("⚠️ Telegram ထဲမှ ဖွင့်ပါ","info");
   }
-
   document.getElementById("display-username").textContent = "@" + STATE.username;
   document.getElementById("avatar").textContent = STATE.username.charAt(0).toUpperCase();
-
-  // Register with backend
   try {
-    const res = await apiFetch("/api/users/register", "POST", {
-      telegram_id: STATE.telegramId,
-      username:    STATE.username,
+    const res = await apiFetch("/api/users/register","POST",{
+      telegram_id: STATE.telegramId, username: STATE.username,
     });
     if (res.error === "banned") {
-      document.getElementById("app").innerHTML = `
-        <div class="flex flex-col items-center justify-center h-full px-6 text-center">
+      document.getElementById("app").innerHTML =
+        `<div class="flex flex-col items-center justify-center h-full px-6 text-center">
           <div class="text-5xl mb-4">🚫</div>
           <p class="text-rose-400 font-bold text-lg mb-2">Account ပိတ်ဆို့ခံရသည်</p>
-          <p class="text-slate-400 text-sm">${escHtml(res.ban_reason || "Admin ကို ဆက်သွယ်ပါ")}</p>
+          <p class="text-slate-400 text-sm">${escHtml(res.ban_reason||"Admin ကို ဆက်သွယ်ပါ")}</p>
         </div>`;
       return;
     }
-    if (res.user) {
-      STATE.balance = res.user.balance;
-      updateBalanceUI();
-    }
-  } catch (err) {
-    console.error("[init]", err);
-    showToast("Server ချိတ်ဆက်မှု မအောင်မြင်", "error");
+    if (res.user) { STATE.balance = res.user.balance; updateBalanceUI(); }
+  } catch(err) {
+    console.error("[init]",err);
+    showToast("Server ချိတ်ဆက်မှု မအောင်မြင်","error");
   }
-
-  refreshSerial();
-  buildDepositForms();
-  fetchMatches();
+  refreshSerial(); buildDepositForms(); fetchMatches();
 }
 
-/* ─────────────────────────────────────────────
-   C. NAVIGATION
-   ───────────────────────────────────────────── */
+/* ── NAVIGATION ── */
 function switchTab(name) {
-  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-  document.getElementById("tab-" + name)?.classList.add("active");
-  document.getElementById("nav-" + name)?.classList.add("active");
+  document.querySelectorAll(".tab-panel").forEach(p=>p.classList.remove("active"));
+  document.querySelectorAll(".nav-btn").forEach(b=>b.classList.remove("active"));
+  document.getElementById("tab-"+name)?.classList.add("active");
+  document.getElementById("nav-"+name)?.classList.add("active");
   STATE.currentTab = name;
-
-  if (name === "home")    fetchMatches();
-  if (name === "history") fetchHistory();
-  if (name === "match")   renderBetChips();
+  if (name==="home")    fetchMatches();
+  if (name==="history") fetchHistory();
+  if (name==="match")   renderBetChips();
 }
 
-/* ─────────────────────────────────────────────
-   D. HOME TAB
-   ───────────────────────────────────────────── */
+/* ── HOME TAB ── */
 async function fetchMatches() {
   const c = document.getElementById("matches-container");
   c.innerHTML = '<div class="spinner"></div>';
   try {
-    const data    = await apiFetch("/api/matches", "GET");
-    const matches = (data.matches || []).filter(m => !STATE.hiddenMatchIds.has(m.id));
+    const data = await apiFetch("/api/matches","GET");
+    const matches = (data.matches||[]).filter(m=>!STATE.hiddenMatchIds.has(m.id));
     renderMatches(matches);
   } catch {
-    c.innerHTML = `
-      <div class="text-center py-10 text-slate-500 text-sm">
-        <p class="text-2xl mb-2">⚠️</p><p>Server ချိတ်ဆက်မှု မအောင်မြင်</p>
-        <button onclick="fetchMatches()" class="mt-3 text-xs text-amber-400 border border-amber-400/30 rounded-full px-3 py-1">↻ ထပ်ကြိုးစားရန်</button>
-      </div>`;
+    c.innerHTML = `<div class="text-center py-10 text-slate-500 text-sm">
+      <p class="text-2xl mb-2">⚠️</p><p>Server ချိတ်ဆက်မှု မအောင်မြင်</p>
+      <button onclick="fetchMatches()" class="mt-3 text-xs text-amber-400 border border-amber-400/30 rounded-full px-3 py-1">↻ ထပ်ကြိုးစားရန်</button>
+    </div>`;
   }
 }
 
 function renderMatches(matches) {
   const c = document.getElementById("matches-container");
   if (!matches.length) {
-    c.innerHTML = `
-      <div class="flex flex-col items-center justify-center py-16 text-slate-500">
-        <div class="text-4xl mb-3">🎮</div>
-        <p class="text-base font-semibold text-slate-400">ပွဲစဉ်မရှိသေးပါ</p>
-        <p class="text-xs text-slate-600 mt-1">Match တစ်ခု ဖန်တီးပါ</p>
-      </div>`;
+    c.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-500">
+      <div class="text-4xl mb-3">🎮</div>
+      <p class="text-base font-semibold text-slate-400">ပွဲစဉ်မရှိသေးပါ</p>
+      <p class="text-xs text-slate-600 mt-1">Match တစ်ခု ဖန်တီးပါ</p>
+    </div>`;
     return;
   }
-
   c.innerHTML = matches.map(m => {
-    const isOwn    = m.creator_id === STATE.telegramId;
-    const creator  = m.creator_username || "unknown";
-    const tgLink   = `<a href="https://t.me/${escHtml(creator)}" target="_blank"
-                         class="text-blue-400 hover:text-blue-300 underline underline-offset-2">
-                       @${escHtml(creator)}</a>`;
-    const schedRow = m.schedule_time
+    const isOwn  = m.creator_id === STATE.telegramId;
+    const cname  = m.creator_username || "unknown";
+    const tgLink = `<a href="https://t.me/${escHtml(cname)}" target="_blank"
+                       class="text-blue-400 hover:text-blue-300 underline underline-offset-2">@${escHtml(cname)}</a>`;
+    const sched  = m.schedule_time
       ? `<span class="text-slate-400 text-xs">ကစားမည့်အချိန်</span>
-         <span class="text-sky-400 font-semibold text-right text-xs">${escHtml(formatSchedule(m.schedule_time))}</span>`
-      : "";
-
+         <span class="text-sky-400 font-semibold text-right text-xs">${escHtml(formatSchedule(m.schedule_time))}</span>` : "";
     return `
     <div class="match-card fade-in" id="card-${m.id}">
       <div class="flex items-center justify-between mb-3">
@@ -607,69 +567,36 @@ function renderMatches(matches) {
         <span class="text-slate-100 font-semibold text-right text-xs">${escHtml(m.game_id)}</span>
         <span class="text-slate-400 text-xs">Game Name</span>
         <span class="text-slate-100 font-semibold text-right text-xs truncate">${escHtml(m.game_name)}</span>
-        <span class="text-slate-400 text-xs">အမှတ်စဉ်</span>
-        <span class="text-slate-100 font-semibold text-right text-xs">${escHtml(m.serial_id)}</span>
-        ${schedRow}
+        ${sched}
         <span class="text-slate-400 text-xs">ကြေး</span>
         <span class="text-amber-400 font-bold text-right text-xs">${formatAmount(m.bet_amount)} ကျပ်</span>
-        <span class="text-slate-400 text-xs">ရရှိ</span>
+        <span class="text-slate-400 text-xs">နိုင်ရင် ရရှိ</span>
         <span class="text-emerald-400 font-bold text-right text-xs">${formatAmount(m.reward_amount)} ကျပ်</span>
       </div>
       <div class="flex gap-2">
         ${isOwn
           ? `<button onclick="hideMatch('${m.id}')"
-                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">
-               ✕ Cancel
-             </button>
-             <button disabled class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-800 text-slate-600 cursor-not-allowed">
-               Your Match
-             </button>`
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">✕ Cancel</button>
+             <button disabled class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-800 text-slate-600 cursor-not-allowed">Your Match</button>`
           : `<button onclick="hideMatchLocally('${m.id}')"
-                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">
-               Hide
-             </button>
-             <button onclick="playMatch('${m.id}',${m.bet_amount})"
-                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors active:scale-95 shadow-md shadow-amber-500/20">
-               ▶ Play
-             </button>`
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Hide</button>
+             <button onclick="openJoinModal('${m.id}',${m.bet_amount},${m.reward_amount},'${escHtml(m.serial_id)}','${escHtml(cname)}')"
+                     class="flex-1 py-2 rounded-lg text-xs font-bold font-game bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors active:scale-95 shadow-md shadow-amber-500/20">▶ Play</button>`
         }
       </div>
     </div>`;
   }).join("");
 }
 
-async function playMatch(matchId, betAmount) {
-  if (STATE.balance < betAmount) { showToast("Insufficient balance to join","error"); return; }
-  if (!confirm(`ကြေး ${formatAmount(betAmount)} ကျပ် ဖြင့် ဝင်ကစားမည်လား?`)) return;
-
-  try {
-    const res = await apiFetch("/api/matches/join","POST",{
-      telegram_id: STATE.telegramId, match_id: matchId,
-    });
-    STATE.balance = res.new_balance;
-    updateBalanceUI();
-    STATE.hiddenMatchIds.add(matchId);
-    showToast("✅ Match ဝင်ပြီ! Bot ထဲမှ /upload လုပ်ပါ","success");
-    fetchMatches();
-  } catch (err) {
-    showToast(err.message || "Insufficient balance to join","error");
-  }
-}
-
 async function hideMatch(matchId) {
   if (!confirm("Match ကိုဖျက်ပြီး ကြေးပြန်ရမည်လား?")) return;
   try {
-    const res = await apiFetch("/api/matches/hide","POST",{
-      telegram_id: STATE.telegramId, match_id: matchId,
-    });
-    STATE.balance = res.new_balance;
-    updateBalanceUI();
+    const res = await apiFetch("/api/matches/hide","POST",{telegram_id:STATE.telegramId,match_id:matchId});
+    STATE.balance = res.new_balance; updateBalanceUI();
     STATE.hiddenMatchIds.add(matchId);
     showToast("Match ပယ်ဖျက်ပြီ — ကြေးပြန်ရသည်","info");
     fetchMatches();
-  } catch (err) {
-    showToast(err.message || "Hide မအောင်မြင်","error");
-  }
+  } catch(err) { showToast(translateApiError(err.message)||"Hide မအောင်မြင်","error"); }
 }
 
 function hideMatchLocally(matchId) {
@@ -677,38 +604,146 @@ function hideMatchLocally(matchId) {
   document.getElementById("card-"+matchId)?.remove();
 }
 
-/* ─────────────────────────────────────────────
-   E. MATCH TAB
-   ───────────────────────────────────────────── */
+/* ── JOIN MATCH MODAL ──
+   Backend (server.js) join endpoint ကနေ Player 1 ထံ Telegram notification
+   တိုက်ရိုက် ပို့ပေးနေပြီ။ (bot.sendMessage ပါဝင်ပြီးသား)
+
+   Server.js join route ထဲတွင် joiner_game_id, joiner_game_name ကို
+   match record တွင် သိမ်းချင်ပါက:
+     dbRun(`UPDATE matches SET joiner_id=?, joiner_game_id=?, joiner_game_name=?,
+            status='active', updated_at=datetime('now') WHERE id=? AND status='pending'`,
+           [tid, joiner_game_id, joiner_game_name, match_id]);
+   နှင့် notification message ကို:
+     `🎮 Game ID: ${joiner_game_id}\n🏷 Name: ${joiner_game_name}`
+   ထည့်ပေးနိုင်သည်။
+*/
+function openJoinModal(matchId, betAmount, rewardAmount, serialId, creatorUsername) {
+  if (STATE.balance < betAmount) {
+    showToast("⚠️ Balance မလုံလောက်ပါ — AddFunds လုပ်ပါ","error");
+    return;
+  }
+  STATE.joinTarget = {matchId, betAmount, rewardAmount, serialId, creatorUsername};
+  document.getElementById("jm-serial").textContent  = serialId;
+  document.getElementById("jm-bet").textContent     = formatAmount(betAmount) + " ကျပ်";
+  document.getElementById("jm-reward").textContent  = formatAmount(rewardAmount) + " ကျပ်";
+  document.getElementById("jm-creator").textContent = "@" + creatorUsername;
+  const warnEl = document.getElementById("jm-balance-warn");
+  const remaining = STATE.balance - betAmount;
+  if (remaining < betAmount) {
+    document.getElementById("jm-balance-warn-text").textContent =
+      `လက်ကျန် ${formatAmount(STATE.balance)} ကျပ် — ဝင်ပြီးရင် ${formatAmount(remaining)} ကျပ် ကျန်မည်`;
+    warnEl.classList.remove("hidden");
+  } else {
+    warnEl.classList.add("hidden");
+  }
+  document.getElementById("jm-game-id").value   = "";
+  document.getElementById("jm-game-name").value = "";
+  document.getElementById("jm-error").classList.add("hidden");
+  document.getElementById("jm-game-id").classList.remove("is-error");
+  document.getElementById("jm-game-name").classList.remove("is-error");
+  setJoinLoading(false);
+  document.getElementById("join-modal").classList.add("open");
+}
+
+function closeJoinModal() {
+  if (STATE.joinBusy) return;
+  document.getElementById("join-modal").classList.remove("open");
+  STATE.joinTarget = null;
+}
+
+function onJoinBackdropClick(e) { if (e.target.id==="join-modal") closeJoinModal(); }
+
+function jmClearError() {
+  document.getElementById("jm-error").classList.add("hidden");
+  document.getElementById("jm-game-id").classList.remove("is-error");
+  document.getElementById("jm-game-name").classList.remove("is-error");
+}
+
+function setJoinLoading(on) {
+  STATE.joinBusy = on;
+  const btn     = document.getElementById("jm-confirm-btn");
+  const txt     = document.getElementById("jm-btn-text");
+  const sp      = document.getElementById("jm-spinner");
+  btn.disabled  = on;
+  txt.textContent = on ? "ဝင်ဆောင်နေသည်..." : "⚔️ Match ဝင်မည်";
+  on ? sp.classList.remove("hidden") : sp.classList.add("hidden");
+}
+
+function showJoinError(msg) {
+  const el = document.getElementById("jm-error");
+  el.textContent = msg; el.classList.remove("hidden");
+}
+
+async function confirmJoin() {
+  if (STATE.joinBusy || !STATE.joinTarget) return;  // double-click guard
+  const gameId   = document.getElementById("jm-game-id").value.trim();
+  const gameName = document.getElementById("jm-game-name").value.trim();
+  // Validate
+  if (!gameId || !/^\d+$/.test(gameId)) {
+    document.getElementById("jm-game-id").classList.add("is-error");
+    showJoinError("⚠️ Game ID ကို ဂဏန်းများသာ ဖြည့်ပါ (e.g. 987654321)"); return;
+  }
+  if (!gameName) {
+    document.getElementById("jm-game-name").classList.add("is-error");
+    showJoinError("⚠️ Game Name ဖြည့်ပါ"); return;
+  }
+  setJoinLoading(true);
+  try {
+    const res = await apiFetch("/api/matches/join","POST",{
+      telegram_id:      STATE.telegramId,
+      match_id:         STATE.joinTarget.matchId,
+      joiner_game_id:   gameId,
+      joiner_game_name: gameName,
+    });
+    STATE.balance = res.new_balance; updateBalanceUI();
+    STATE.hiddenMatchIds.add(STATE.joinTarget.matchId);
+    closeJoinModal();
+    showToast("✅ Match ဝင်ပြီ! Player 1 ထံ Noti ပေးပြီ","success");
+    fetchMatches();
+  } catch(err) {
+    showJoinError("❌ " + translateApiError(err.message));
+    setJoinLoading(false);
+  }
+}
+
+/* ── ERROR TRANSLATOR ── */
+function translateApiError(msg) {
+  if (!msg) return "တစ်ခုခု မှားနေသည် — ထပ်ကြိုးစားပါ";
+  const m = msg.toLowerCase();
+  if (m.includes("insufficient balance")) return "Balance မလုံလောက်ပါ — AddFunds လုပ်ပါ";
+  if (m.includes("no longer available"))  return "ဤ Match ကို အခြားသူ ဦးဝင်ပြီးပြီ";
+  if (m.includes("own match"))            return "ကိုယ်ဖန်တီးသော Match ကို ကိုယ်ဝင်၍ မရပါ";
+  if (m.includes("not found"))            return "Match ရှာမတွေ့ပါ — ပွဲပြောင်းသွားနိုင်သည်";
+  if (m.includes("banned"))              return "Account ပိတ်ဆို့ခံရသည် — Admin ကို ဆက်သွယ်ပါ";
+  if (m.includes("missing"))             return "အချက်အလက် မပြည့်ပါ — ထပ်ဖြည့်ပါ";
+  if (m.includes("network")||m.includes("fetch")) return "Internet ချိတ်ဆက်မှု မအောင်မြင်";
+  return msg;
+}
+
+/* ── MATCH TAB ── */
 function generateSerial() {
   const c = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
   return Array.from({length:8},()=>c[Math.floor(Math.random()*c.length)]).join("");
 }
-
 function refreshSerial() {
   STATE.serialId = generateSerial();
   const el = document.getElementById("serial-display");
   if (!el) return;
-  el.classList.remove("fade-in");
-  void el.offsetWidth;
-  el.textContent = STATE.serialId;
-  el.classList.add("fade-in");
+  el.classList.remove("fade-in"); void el.offsetWidth;
+  el.textContent = STATE.serialId; el.classList.add("fade-in");
 }
-
 function selectBet(amount) {
   STATE.selectedBet = amount;
   document.querySelectorAll(".bet-chip").forEach(c=>c.classList.remove("selected"));
   document.querySelector(`.bet-chip[data-amount="${amount}"]`)?.classList.add("selected");
   const cw = document.getElementById("custom-bet-wrap");
-  if (amount === "custom") { cw.classList.remove("hidden"); updateReward(0); }
+  if (amount==="custom") { cw.classList.remove("hidden"); updateReward(0); }
   else { cw.classList.add("hidden"); updateReward(amount); validateBet(amount); }
 }
-
 function onCustomBetInput() {
   const v = parseInt(document.getElementById("custom-bet-amount").value,10);
   if (!isNaN(v)&&v>0) { updateReward(v); validateBet(v); } else updateReward(0);
 }
-
 function validateBet(amount) {
   const e = document.getElementById("bet-error");
   if (amount > STATE.balance) {
@@ -717,49 +752,38 @@ function validateBet(amount) {
   }
   e.classList.add("hidden"); return true;
 }
-
 function updateReward(bet) {
   const el = document.getElementById("reward-display");
   if (el) el.value = bet>0 ? formatAmount(Math.floor(bet*2*0.9))+" ကျပ်" : "";
 }
-
 function renderBetChips() {
   [5000,10000,15000,30000,50000].forEach(a=>{
     const c=document.querySelector(`.bet-chip[data-amount="${a}"]`);
-    if (!c) return;
+    if(!c)return;
     STATE.balance<a ? c.classList.add("disabled") : c.classList.remove("disabled");
   });
 }
-
 async function createMatch() {
   const gameId   = document.getElementById("game-id").value.trim();
   const gameName = document.getElementById("game-name").value.trim();
   const sched    = document.getElementById("schedule-time").value;
   const btn      = document.getElementById("create-match-btn");
-
-  if (!gameId)                       { showToast("Game ID ဖြည့်ပါ","error"); return; }
-  if (!/^\d+$/.test(gameId))         { showToast("Game ID ဂဏန်းသာ ဖြည့်ပါ","error"); return; }
-  if (!gameName)                     { showToast("Game နာမည် ဖြည့်ပါ","error"); return; }
-
+  if (!gameId)               { showToast("Game ID ဖြည့်ပါ","error"); return; }
+  if (!/^\d+$/.test(gameId)) { showToast("Game ID ဂဏန်းသာ ဖြည့်ပါ","error"); return; }
+  if (!gameName)             { showToast("Game နာမည် ဖြည့်ပါ","error"); return; }
   let bet = STATE.selectedBet;
   if (bet==="custom") bet=parseInt(document.getElementById("custom-bet-amount").value,10);
   if (!bet||isNaN(bet)||bet<=0) { showToast("ကြေးပမာဏ ရွေးပါ","error"); return; }
   if (!validateBet(bet)) return;
-
   btn.disabled=true; btn.textContent="⏳ Creating...";
   try {
     const res = await apiFetch("/api/matches/create","POST",{
-      telegram_id:   STATE.telegramId,
-      game_id:       gameId,
-      game_name:     gameName,
-      bet_amount:    bet,
-      schedule_time: sched || null,
+      telegram_id: STATE.telegramId, game_id: gameId,
+      game_name: gameName, bet_amount: bet, schedule_time: sched||null,
     });
-    STATE.balance = res.new_balance;
-    updateBalanceUI();
+    STATE.balance = res.new_balance; updateBalanceUI();
     document.getElementById("serial-display").textContent = res.match.serial_id;
     showToast("✅ Match ဖန်တီးပြီ!","success");
-    // Reset form
     document.getElementById("game-id").value="";
     document.getElementById("game-name").value="";
     document.getElementById("schedule-time").value="";
@@ -767,18 +791,12 @@ async function createMatch() {
     document.querySelectorAll(".bet-chip").forEach(c=>c.classList.remove("selected"));
     document.getElementById("custom-bet-wrap").classList.add("hidden");
     STATE.selectedBet=null;
-    setTimeout(refreshSerial,600);
-    setTimeout(()=>switchTab("home"),1200);
-  } catch (err) {
-    showToast(err.message||"Match ဖန်တီးမရ","error");
-  } finally {
-    btn.disabled=false; btn.textContent="⚔️ match";
-  }
+    setTimeout(refreshSerial,600); setTimeout(()=>switchTab("home"),1200);
+  } catch(err) { showToast(translateApiError(err.message)||"Match ဖန်တီးမရ","error"); }
+  finally { btn.disabled=false; btn.textContent="⚔️ Match ဖန်တီးမည်"; }
 }
 
-/* ─────────────────────────────────────────────
-   F. HISTORY TAB
-   ───────────────────────────────────────────── */
+/* ── HISTORY TAB ── */
 async function fetchHistory() {
   const c = document.getElementById("history-container");
   if (!STATE.telegramId) return;
@@ -786,26 +804,18 @@ async function fetchHistory() {
   try {
     const data = await apiFetch(`/api/matches/history/${STATE.telegramId}`,"GET");
     renderHistory(data.matches||[]);
-  } catch {
-    c.innerHTML=`<p class="text-slate-500 text-sm text-center py-8">History မရ</p>`;
-  }
+  } catch { c.innerHTML=`<p class="text-slate-500 text-sm text-center py-8">History မရ</p>`; }
 }
-
 function renderHistory(matches) {
   const c = document.getElementById("history-container");
   if (!matches.length) {
     c.innerHTML=`<div class="text-center py-12 text-slate-500"><p class="text-3xl mb-2">📭</p><p class="text-sm">Match မကစားရသေးပါ</p></div>`;
     return;
   }
-  const badge={
-    pending:  "bg-amber-400/20 text-amber-400",
-    active:   "bg-blue-400/20 text-blue-400",
-    verifying:"bg-purple-400/20 text-purple-400",
-    done:     "bg-emerald-400/20 text-emerald-400",
-    cancelled:"bg-slate-600/40 text-slate-400",
-  };
+  const badge={pending:"bg-amber-400/20 text-amber-400",active:"bg-blue-400/20 text-blue-400",
+               verifying:"bg-purple-400/20 text-purple-400",done:"bg-emerald-400/20 text-emerald-400",
+               cancelled:"bg-slate-600/40 text-slate-400"};
   const label={pending:"Pending",active:"Playing",verifying:"Verifying",done:"Done",cancelled:"Cancelled"};
-
   c.innerHTML=matches.map(m=>`
     <div class="match-card fade-in">
       <div class="flex items-center justify-between mb-2">
@@ -824,18 +834,12 @@ function renderHistory(matches) {
     </div>`).join("");
 }
 
-/* ─────────────────────────────────────────────
-   G. DEPOSIT MODAL
-   ───────────────────────────────────────────── */
-
-/** Build the deposit form fields HTML for a given method */
+/* ── DEPOSIT MODAL ── */
 function depositFormHTML(method) {
   return `
-    <!-- Warning -->
     <div class="bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 mb-4">
       <p class="text-rose-400 text-xs font-semibold leading-relaxed">
-        ⚠️ ငွေလွှဲပြီးမှသာ Confirm ကိုနှိပ်ပါ။<br/>
-        မလွှဲဘဲ Confirm နှိပ်ပါက Account ပိတ်မည်။
+        ⚠️ ငွေလွှဲပြီးမှသာ Confirm ကိုနှိပ်ပါ။<br/>မလွှဲဘဲ Confirm နှိပ်ပါက Account ပိတ်မည်။
       </p>
     </div>
     <div class="flex flex-col gap-3">
@@ -846,7 +850,7 @@ function depositFormHTML(method) {
       </div>
       <div>
         <label class="block text-xs text-slate-400 mb-1">ငွေလွှဲသည့် အကောင့်အမည် <span class="text-rose-400">*</span></label>
-        <input id="${method}-sender-name" type="text" placeholder="အမည်ပြည့်ပြည့်ဝဝ ဖြည့်ပါ" class="field"/>
+        <input id="${method}-sender-name" type="text" placeholder="အမည်ပြည့်ပြည့်ဝဝ" class="field"/>
       </div>
       <div>
         <label class="block text-xs text-slate-400 mb-1">ငွေလွှဲသည့် ဖုန်းနံပါတ် <span class="text-rose-400">*</span></label>
@@ -854,27 +858,26 @@ function depositFormHTML(method) {
                class="field" oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
       </div>
       <div>
-        <label class="block text-xs text-slate-400 mb-1">လုပ်ငန်းစဉ်အမှတ် (Transaction ID) <span class="text-rose-400">*</span></label>
+        <label class="block text-xs text-slate-400 mb-1">Transaction ID <span class="text-rose-400">*</span></label>
         <input id="${method}-tx-id" type="text" placeholder="Transaction reference number" class="field"/>
       </div>
       <div>
         <label class="block text-xs text-slate-400 mb-1">ငွေလွှဲသည့်အချိန် <span class="text-rose-400">*</span></label>
         <input id="${method}-transfer-time" type="datetime-local" class="field" style="color-scheme:dark;"/>
       </div>
-      <button onclick="submitDeposit('${method}')"
+      <button id="${method}-submit-btn" onclick="submitDeposit('${method}')"
               class="w-full py-3 rounded-xl font-bold text-sm font-game
                      bg-emerald-500 hover:bg-emerald-400 text-slate-900
-                     transition-all active:scale-[.98] mt-1">
+                     transition-all active:scale-[.98] mt-1
+                     disabled:opacity-40 disabled:cursor-not-allowed">
         ✅ Confirm လွှဲပြီး
       </button>
     </div>`;
 }
-
 function buildDepositForms() {
   document.getElementById("kbz-form-fields").innerHTML  = depositFormHTML("kbz");
   document.getElementById("wave-form-fields").innerHTML = depositFormHTML("wave");
 }
-
 function switchPayTab(tab) {
   STATE.activePayTab = tab;
   document.querySelectorAll(".pay-content").forEach(e=>e.classList.add("hidden"));
@@ -882,107 +885,68 @@ function switchPayTab(tab) {
   document.querySelectorAll(".pay-tab-btn").forEach(b=>b.classList.remove("active"));
   document.getElementById("tab-"+tab+"-btn").classList.add("active");
 }
-
-function openDepositModal() {
-  document.getElementById("deposit-modal").classList.add("open");
-}
-function closeDepositModal() {
-  document.getElementById("deposit-modal").classList.remove("open");
-}
-function onModalBackdropClick(e) {
-  if (e.target.id==="deposit-modal") closeDepositModal();
-}
-
+function openDepositModal()  { document.getElementById("deposit-modal").classList.add("open"); }
+function closeDepositModal() { document.getElementById("deposit-modal").classList.remove("open"); }
+function onModalBackdropClick(e) { if(e.target.id==="deposit-modal") closeDepositModal(); }
 async function submitDeposit(method) {
-  const get = id => document.getElementById(id)?.value.trim()||"";
-  const amount        = get(`${method}-amount`);
-  const senderName    = get(`${method}-sender-name`);
-  const senderPhone   = get(`${method}-sender-phone`);
-  const txId          = get(`${method}-tx-id`);
-  const transferTime  = get(`${method}-transfer-time`);
-
+  const get = id=>document.getElementById(id)?.value.trim()||"";
+  const amount=get(`${method}-amount`),senderName=get(`${method}-sender-name`),
+        senderPhone=get(`${method}-sender-phone`),txId=get(`${method}-tx-id`),
+        transferTime=get(`${method}-transfer-time`);
   if (!amount||!senderName||!senderPhone||!txId||!transferTime) {
     showToast("ကွက်လပ်အားလုံး ဖြည့်ပါ","error"); return;
   }
-  if (parseInt(amount,10)<1000) {
-    showToast("အနည်းဆုံး 1,000 ကျပ် ဖြည့်ပါ","error"); return;
-  }
-
-  const btn = document.querySelector(`#pay-${method} button[onclick*="submitDeposit"]`);
+  if (parseInt(amount,10)<1000) { showToast("အနည်းဆုံး 1,000 ကျပ် ဖြည့်ပါ","error"); return; }
+  const btn=document.getElementById(`${method}-submit-btn`);
   if (btn) { btn.disabled=true; btn.textContent="⏳ Sending..."; }
-
   try {
     await apiFetch("/api/deposit","POST",{
-      telegram_id:    STATE.telegramId,
-      username:       STATE.username,
-      method:         method==="kbz" ? "KBZ Pay" : "Wave Pay",
-      amount:         parseInt(amount,10),
-      sender_name:    senderName,
-      sender_phone:   senderPhone,
-      transaction_id: txId,
-      transfer_time:  transferTime,
+      telegram_id:STATE.telegramId,username:STATE.username,
+      method:method==="kbz"?"KBZ Pay":"Wave Pay",
+      amount:parseInt(amount,10),sender_name:senderName,
+      sender_phone:senderPhone,transaction_id:txId,transfer_time:transferTime,
     });
     showToast("✅ Deposit Request ပေးပို့ပြီ! Admin စစ်ဆေးမည်","success");
     closeDepositModal();
-    // Clear fields
     ["amount","sender-name","sender-phone","tx-id","transfer-time"].forEach(f=>{
-      const el=document.getElementById(`${method}-${f}`);
-      if (el) el.value="";
+      const el=document.getElementById(`${method}-${f}`); if(el) el.value="";
     });
-  } catch (err) {
-    showToast(err.message||"Deposit မပို့နိုင်","error");
-  } finally {
-    if (btn) { btn.disabled=false; btn.textContent="✅ Confirm လွှဲပြီး"; }
-  }
+  } catch(err) { showToast(translateApiError(err.message)||"Deposit မပို့နိုင်","error"); }
+  finally { if(btn){btn.disabled=false;btn.textContent="✅ Confirm လွှဲပြီး";} }
 }
 
-/* ─────────────────────────────────────────────
-   H. UTILITIES
-   ───────────────────────────────────────────── */
-async function apiFetch(path, method="GET", body=null) {
-  const opts = { method, headers:{"Content-Type":"application/json"} };
-  if (body) opts.body = JSON.stringify(body);
-  const res  = await fetch(BACKEND_URL+path, opts);
-  const data = await res.json();
+/* ── UTILITIES ── */
+async function apiFetch(path,method="GET",body=null) {
+  const opts={method,headers:{"Content-Type":"application/json"}};
+  if (body) opts.body=JSON.stringify(body);
+  const res=await fetch(BACKEND_URL+path,opts);
+  const data=await res.json();
   if (!res.ok) throw new Error(data.error||`HTTP ${res.status}`);
   return data;
 }
-
 let _toastTimer=null;
-function showToast(msg, type="info") {
+function showToast(msg,type="info") {
   const el=document.getElementById("toast");
   el.textContent=msg; el.className=`show ${type}`;
-  if (_toastTimer) clearTimeout(_toastTimer);
-  _toastTimer=setTimeout(()=>{ el.className=""; },3000);
+  if(_toastTimer)clearTimeout(_toastTimer);
+  _toastTimer=setTimeout(()=>{el.className="";},3500);
 }
-
 function updateBalanceUI() {
   const el=document.getElementById("display-balance");
-  if (el) el.textContent=formatAmount(STATE.balance);
+  if(el) el.textContent=formatAmount(STATE.balance);
 }
-
 function formatAmount(n) { return Number(n||0).toLocaleString("en-US"); }
-
 function formatSchedule(dt) {
-  if (!dt) return "";
-  try {
-    const d=new Date(dt);
-    return d.toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
-  } catch { return dt; }
+  if(!dt)return"";
+  try{ return new Date(dt).toLocaleString("en-GB",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }
+  catch{return dt;}
 }
-
 function escHtml(s) {
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
+function goToBot() { const tg=window.Telegram?.WebApp; if(tg)tg.close(); }
 
-function goToBot() {
-  // Close mini app and open Telegram chat with bot
-  const tg = window.Telegram?.WebApp;
-  if (tg) tg.close();
-}
-
-/* Boot */
-document.addEventListener("DOMContentLoaded", initApp);
+document.addEventListener("DOMContentLoaded",initApp);
 </script>
 </body>
 </html>
